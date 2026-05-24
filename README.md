@@ -4,7 +4,7 @@ Windows のシステムトレイに常駐し、**Claude Code** と **Codex** の
 
 ## 必要環境
 - Windows 10 / 11
-- Node.js 20+ (Electron 32 が動く版)
+- Node.js 22.12+ (Electron 42 のインストール / ビルドに必要)
 - `claude` CLI ログイン済み (`~/.claude/.credentials.json` が存在)
 - `codex` CLI ログイン済み (`~/.codex/auth.json` が存在)
 

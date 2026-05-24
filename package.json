@@ -6,6 +6,9 @@
   "author": "agent-limit-checker contributors",
   "license": "UNLICENSED",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
@@ -14,8 +17,8 @@
     "build": "electron-builder --win --x64"
   },
   "devDependencies": {
-    "electron": "^32.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.agent-limit-checker.app",
