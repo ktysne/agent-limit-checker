@@ -70,6 +70,19 @@
 - この環境では `winCodeSign` 展開時に symlink 権限エラーが出るため、`win.signAndEditExecutable=false` で未署名 portable を生成する設定にしている。
 - TODO: 署名付きで配布する場合は Developer Mode / 管理者権限 / CI の署名環境で `signAndEditExecutable` を戻して確認。
 
+### I. 「ログイン時に起動」スイッチが反応しない問題 (対応済み, 2026-05-24)
+- 症状: ポップオーバーの「ログイン時に自動起動」スライダーを押しても、瞬時に OFF に戻ってしまい有効化できない (内部的には Run キーが書き込まれていることもある)。
+- 切り分け:
+  - 別 `appUserModelId` を使った probe (`test/login-item-probe.js`) で `setLoginItemSettings`/`getLoginItemSettings` の挙動を直接観察。
+  - `setLoginItemSettings({openAtLogin: true, path: ..., args: ...})` の直後に **`getLoginItemSettings()` (引数なし) を呼ぶと `openAtLogin: false` が返る**ことが判明。`executableWillLaunchAtLogin: true` / `launchItems` には登録された情報が入っており、登録自体は成功している。
+  - 引数付き `getLoginItemSettings({path, args})` だと `openAtLogin: true` になる。Electron は path + args が完全一致した場合のみ `openAtLogin: true` を返す仕様。
+- 原因: `src/autoLaunch.js#isEnabled` が引数なしで `getLoginItemSettings()` を呼んでいたため、登録済みでも常に `false` を返していた。IPC ハンドラはこれを snapshot に詰めて返し、renderer の `applySnapshot` が `al.checked = false` を強制セットするため UI が瞬時に OFF に戻る。
+- 修正:
+  - `isEnabled` を「登録時と同じ `path` + `args` を渡して `getLoginItemSettings` を呼ぶ」「`openAtLogin` が false なら `executableWillLaunchAtLogin` を見る」「それも無ければ `launchItems[].enabled` を確認」の順で読むよう変更。
+  - `src/autoLaunch.js#getRegistrablePath()` を追加し、electron-builder portable target のときは `process.env.PORTABLE_EXECUTABLE_FILE` を採用。portable は `%TEMP%\<random>\AgentLimitChecker.exe` に展開され終了時に消えるので、`process.execPath` を Run キーに書くと次回ログイン時にリンク切れになる。launcher exe のパスは固定なのでこちらを使う。
+- 検証: `npx electron test/login-item-probe.js` が PASS。`test/login-item-stale-probe.js` で古い path の Run エントリがあるときも Electron が無視することを確認 (= 古いエントリで isEnabled が誤って true を返すことはない)。
+- 残り注意点: ユーザのレジストリに既に古い temp path の Run エントリが残っている場合、本修正をビルドしたバイナリで一度トグル OFF→ON すると最新のランチャパスで上書きされる。
+
 ### G. 他に未対応
 - **CLAUDE_API_KEY 経由**: macOS 版同様、本アプリも OAuth トークン経由でのみ動作。`ANTHROPIC_API_KEY` での代替ログインは未対応。
 - **multiple Codex プロファイル**: `rateLimitsByLimitId` を Sort して見る実装は入れているが、複数アカウントの選択 UI はなし。
