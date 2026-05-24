@@ -1,7 +1,6 @@
 # agent-limit-checker (Windows port of token-checker)
 
 Windows のシステムトレイに常駐し、**Claude Code** と **Codex** の API 使用率を可視化するアプリ。
-macOS 版 [otoha1119/token-checker](https://github.com/otoha1119/token-checker) を Windows 向けに再実装したもの。
 
 ## 必要環境
 - Windows 10 / 11
