@@ -1,0 +1,33 @@
+{
+  "name": "agent-limit-checker",
+  "version": "0.1.0",
+  "description": "Windows tray app that shows Claude Code and Codex API rate-limit usage (Windows port of otoha1119/token-checker)",
+  "main": "main.js",
+  "author": "agent-limit-checker contributors",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.agent-limit-checker.app",
+    "productName": "AgentLimitChecker",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "assets/tray-icon.png"
+    }
+  }
+}
