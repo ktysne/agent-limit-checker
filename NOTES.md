@@ -11,6 +11,20 @@
 
 ## 既知の課題 / 後回しにした項目
 
+### 0. 5h ウィンドウが N/A になる問題 (対応済み, 2026-05-24)
+- 症状: スクリーンショット撮影時 (10:38 UTC) に Claude の `5時間` が `N/A` 表示。`週次` は 10% で取れているのに片方だけ落ちる状況。
+- 原因切り分け:
+  - その瞬間に `GET /api/oauth/usage` を直接叩いて生レスポンスを確認 → `five_hour` も `seven_day` も値が返っていた。
+  - だが Anthropic 側の挙動として、**その時間ウィンドウでまだ消費がない場合に `{ "utilization": 0, "resets_at": null }` を返す**ことが判明 (実例: 同じレスポンス中の `seven_day_sonnet` / `seven_day_omelette` も同じ形)。
+  - 旧 `parseBucket` は `if (!resetsAtRaw) return null` でバケット丸ごと捨てていたため、UI が「データなし=N/A」と判定。
+- 修正:
+  - `src/claudeProvider.js` の `parseBucket` で `resets_at: null` でもバケットを残し `{utilization, resetsAt: null}` を返す。
+  - `renderer/renderer.js` の `resetText` が `resetsAt == null` のとき「ウィンドウ未開始 (このウィンドウでまだ消費なし)」を表示。
+  - 単体テストに以下を追加:
+    - `resets_at: null` で `utilization: 0` のバケットがちゃんと残ること
+    - マイクロ秒精度 (`...338620+00:00`) の `resets_at` も Date.parse 経由で正しく数値化されること
+    - utilization が missing のときは null を返すこと
+
 ### A. Claude トークンの自動リフレッシュ (対応済み / 制限あり)
 - 実装済み:
   - `~/.claude/.credentials.json` の `expiresAt` を見て期限切れ直前を検知。

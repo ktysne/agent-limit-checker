@@ -18,6 +18,30 @@ test('detects token refresh window from expiresAt', () => {
   assert.equal(_private.shouldRefresh({}, now), false);
 });
 
+test('parseBucket keeps zero-utilization windows whose resets_at is null', () => {
+  // Anthropic は「このウィンドウでまだ消費していない」とき resets_at: null を返す
+  // (例: five_hour リセット直後、seven_day_sonnet など)。
+  // 旧実装はこれをまるごと null 扱いして UI が "N/A" を出していた。
+  const bucket = _private.parseBucket({ utilization: 0, resets_at: null });
+  assert.deepEqual(bucket, { utilization: 0, resetsAt: null });
+});
+
+test('parseBucket parses microsecond-precision resets_at returned by /api/oauth/usage', () => {
+  const bucket = _private.parseBucket({
+    utilization: 3,
+    resets_at: '2026-05-24T15:30:00.338620+00:00',
+  });
+  assert.ok(bucket, 'bucket should not be dropped');
+  assert.equal(bucket.utilization, 0.03);
+  assert.equal(bucket.resetsAt, Date.parse('2026-05-24T15:30:00.338620+00:00'));
+});
+
+test('parseBucket returns null when utilization is missing', () => {
+  assert.equal(_private.parseBucket(null), null);
+  assert.equal(_private.parseBucket({ utilization: null, resets_at: '2026-01-01T00:00:00Z' }), null);
+  assert.equal(_private.parseBucket({}), null);
+});
+
 test('merges snake_case OAuth refresh response without dropping existing metadata', () => {
   const now = 1_000_000;
   const merged = _private.mergeRefreshResponse({
