@@ -18,6 +18,12 @@ if (!SINGLE_INSTANCE_LOCK) {
   process.exit(0);
 }
 
+// Popover dimensions are locked. We must NEVER feed BrowserWindow.getBounds()
+// back into setBounds(): on Windows with display scaling != 100% Electron
+// rounds in device pixels and the window shrinks 1-2px every cycle.
+const POPOVER_WIDTH = 360;
+const POPOVER_HEIGHT = 520;
+
 let tray = null;
 let popoverWindow = null;
 let pollTimer = null;
@@ -48,8 +54,13 @@ function saveSettings(partial) {
 function createPopoverWindow() {
   if (popoverWindow) return popoverWindow;
   popoverWindow = new BrowserWindow({
-    width: 360,
-    height: 520,
+    width: POPOVER_WIDTH,
+    height: POPOVER_HEIGHT,
+    minWidth: POPOVER_WIDTH,
+    minHeight: POPOVER_HEIGHT,
+    maxWidth: POPOVER_WIDTH,
+    maxHeight: POPOVER_HEIGHT,
+    useContentSize: true,
     show: false,
     frame: false,
     resizable: false,
@@ -124,17 +135,20 @@ function hidePopover() {
 function positionWindowNearTray() {
   if (!popoverWindow || !tray) return;
   const trayBounds = tray.getBounds();
-  const winBounds = popoverWindow.getBounds();
   const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   const workArea = display.workArea;
-  let x = Math.round(trayBounds.x + trayBounds.width / 2 - winBounds.width / 2);
-  let y = Math.round(trayBounds.y - winBounds.height - 8);
+  let x = Math.round(trayBounds.x + trayBounds.width / 2 - POPOVER_WIDTH / 2);
+  let y = Math.round(trayBounds.y - POPOVER_HEIGHT - 8);
   if (y < workArea.y) {
     y = trayBounds.y + trayBounds.height + 8;
   }
-  x = Math.max(workArea.x + 4, Math.min(workArea.x + workArea.width - winBounds.width - 4, x));
-  y = Math.max(workArea.y + 4, Math.min(workArea.y + workArea.height - winBounds.height - 4, y));
-  popoverWindow.setBounds({ x, y, width: winBounds.width, height: winBounds.height });
+  x = Math.max(workArea.x + 4, Math.min(workArea.x + workArea.width - POPOVER_WIDTH - 4, x));
+  y = Math.max(workArea.y + 4, Math.min(workArea.y + workArea.height - POPOVER_HEIGHT - 4, y));
+  // setPosition only — do NOT round-trip getBounds() through setBounds() on
+  // fractional DPI displays. Also re-assert the content size every show so
+  // that we recover if a previous bad cycle already shrank us.
+  popoverWindow.setPosition(x, y);
+  popoverWindow.setContentSize(POPOVER_WIDTH, POPOVER_HEIGHT);
 }
 
 function togglePopover() {

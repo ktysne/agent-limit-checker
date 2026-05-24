@@ -77,6 +77,18 @@
 - **テスト**: `npm test` で `node --test` を実行。Claude refresh 正規化と CLI 探索順の単体テストを追加済み。実接続は引き続き `node smoke-test.js`。
 - **i18n**: UI 文字列はすべて日本語ハードコード。
 
+### H. ポップオーバーが開閉のたびに小さくなる問題 (対応済み, 2026-05-24)
+- 症状: トレイクリックでポップオーバーを何回か開閉していると、ウィンドウが少しずつ縮んでいく。
+- 原因:
+  - `positionWindowNearTray()` が `popoverWindow.getBounds()` → `popoverWindow.setBounds({ x, y, width, height })` のラウンドトリップを毎回実行していた。
+  - Windows の表示スケーリングが 100% 以外 (125% / 150% など) のとき、Electron は内部で device pixel ↔ logical pixel の変換を行い、その際に丸めが発生する。
+  - これを開閉ごとに繰り返すと、開くたびに `width` / `height` が 1〜2px ずつ縮んでいく。
+- 修正:
+  - `POPOVER_WIDTH = 360`, `POPOVER_HEIGHT = 520` を定数化。
+  - `BrowserWindow` 作成時に `useContentSize: true`, `minWidth/maxWidth/minHeight/maxHeight` を同値で固定。
+  - `positionWindowNearTray()` を `setPosition(x, y)` + `setContentSize(POPOVER_WIDTH, POPOVER_HEIGHT)` に変更。`getBounds → setBounds` のラウンドトリップを完全に廃止。
+  - 既に縮んでしまった状態から復帰するための `setContentSize` を毎回実行。
+
 ## ファイル構成
 ```
 agent-limit-checker/
