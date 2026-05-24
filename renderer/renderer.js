@@ -3,7 +3,10 @@
 const ERROR_HINTS = {
   claude_credentials_missing: '`claude login` を実行してから再度更新してください。',
   claude_unauthorized: 'OAuth トークンが無効です。`claude login` で再ログインしてください。',
+  claude_refresh_unconfigured: '自動 refresh は未設定です。`claude login` で再ログインしてください。',
+  claude_refresh_token_missing: 'refresh token がありません。`claude login` で再ログインしてください。',
   codex_cli_missing: 'PowerShell で `npm i -g @openai/codex` を実行してください。',
+  codex_rpc_error: '`codex login` を実行してから再度更新してください。',
 };
 
 function classify(util) {
@@ -112,8 +115,13 @@ function renderFooter(fetchedAt) {
   el.textContent = `最終更新: ${t}`;
 }
 
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+}
+
 function applySnapshot(payload) {
   if (!payload) return;
+  applyTheme(payload.theme);
   renderService('claude', payload.claude);
   renderService('codex', payload.codex);
   renderFooter(payload.fetchedAt);

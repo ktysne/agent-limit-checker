@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeTheme } = require('electron');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
@@ -9,6 +9,8 @@ const autoLaunch = require('./src/autoLaunch');
 const claudeProvider = require('./src/claudeProvider');
 const codexProvider = require('./src/codexProvider');
 const { buildTrayImage } = require('./src/trayIcon');
+const { resolveClaudeExecutable, resolveCodexExecutable } = require('./src/cliPaths');
+const logger = require('./src/logger');
 
 const SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
 if (!SINGLE_INSTANCE_LOCK) {
@@ -20,11 +22,20 @@ let tray = null;
 let popoverWindow = null;
 let pollTimer = null;
 let isPolling = false;
+let fadeTimer = null;
 let latestSnapshot = {
   claude: null, // {ok, data?, error?}
   codex: null,
   fetchedAt: 0,
 };
+
+function currentTheme() {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+function popoverBackgroundColor() {
+  return nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#f7f7f7';
+}
 
 function getSettings() {
   return settingsStore.load();
@@ -45,7 +56,7 @@ function createPopoverWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     transparent: false,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: popoverBackgroundColor(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -57,13 +68,57 @@ function createPopoverWindow() {
   popoverWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   popoverWindow.on('blur', () => {
     if (popoverWindow && !popoverWindow.webContents.isDevToolsOpened()) {
-      popoverWindow.hide();
+      hidePopover();
+    }
+  });
+  popoverWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      event.preventDefault();
+      hidePopover();
     }
   });
   popoverWindow.on('closed', () => {
     popoverWindow = null;
   });
   return popoverWindow;
+}
+
+function clearFadeTimer() {
+  if (fadeTimer) {
+    clearInterval(fadeTimer);
+    fadeTimer = null;
+  }
+}
+
+function fadeWindowTo(win, targetOpacity, done) {
+  clearFadeTimer();
+  const start = typeof win.getOpacity === 'function' ? win.getOpacity() : targetOpacity;
+  const steps = 6;
+  let step = 0;
+  fadeTimer = global.setInterval(() => {
+    if (!win || win.isDestroyed()) {
+      clearFadeTimer();
+      return;
+    }
+    step += 1;
+    const next = start + ((targetOpacity - start) * step) / steps;
+    win.setOpacity(Math.max(0, Math.min(1, next)));
+    if (step >= steps) {
+      clearFadeTimer();
+      if (done) done();
+    }
+  }, 16);
+}
+
+function hidePopover() {
+  const win = popoverWindow;
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  fadeWindowTo(win, 0, () => {
+    if (!win.isDestroyed()) {
+      win.hide();
+      win.setOpacity(1);
+    }
+  });
 }
 
 function positionWindowNearTray() {
@@ -85,12 +140,15 @@ function positionWindowNearTray() {
 function togglePopover() {
   const win = createPopoverWindow();
   if (win.isVisible()) {
-    win.hide();
+    hidePopover();
     return;
   }
   positionWindowNearTray();
+  win.setBackgroundColor(popoverBackgroundColor());
+  win.setOpacity(0);
   win.show();
   win.focus();
+  fadeWindowTo(win, 1);
   sendSnapshotToRenderer();
 }
 
@@ -106,19 +164,54 @@ function percentLabel(util) {
   return `${Math.round(Math.max(0, util) * 100)}%`;
 }
 
+function errorSummary(error) {
+  const code = error && error.code;
+  if (code === 'claude_credentials_missing') return 'login required';
+  if (code === 'claude_unauthorized') return 'login required';
+  if (code === 'claude_rate_limited') return 'rate limited';
+  if (code === 'codex_cli_missing') return 'CLI missing';
+  if (code === 'codex_rpc_error') return 'login required';
+  if (code === 'codex_timeout' || code === 'claude_timeout') return 'timeout';
+  if (code === 'claude_network') return 'network error';
+  return 'error';
+}
+
+function serviceStatusLabel(name, svc) {
+  if (!svc) return `${name}: 取得中`;
+  if (!svc.ok) return `${name}: ${errorSummary(svc.error)}`;
+  return `${name}: ${percentLabel(utilizationFromSnapshot(svc))}`;
+}
+
+function currentTrayScaleFactor() {
+  try {
+    if (tray) {
+      const b = tray.getBounds();
+      const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+      return display.scaleFactor || 1;
+    }
+    return screen.getPrimaryDisplay().scaleFactor || 1;
+  } catch {
+    return 1;
+  }
+}
+
 function updateTray() {
   if (!tray) return;
   const c = utilizationFromSnapshot(latestSnapshot.claude);
   const x = utilizationFromSnapshot(latestSnapshot.codex);
   try {
-    tray.setImage(buildTrayImage(c, x));
+    tray.setImage(buildTrayImage(c, x, {
+      scaleFactor: currentTrayScaleFactor(),
+      claudeError: !!(latestSnapshot.claude && !latestSnapshot.claude.ok),
+      codexError: !!(latestSnapshot.codex && !latestSnapshot.codex.ok),
+    }));
   } catch (err) {
-    console.error('[tray] setImage failed', err);
+    logger.error('[tray] setImage failed', err);
   }
   const tooltipLines = [
     'Agent Limit Checker',
-    `Claude: ${percentLabel(c)}`,
-    `Codex:  ${percentLabel(x)}`,
+    serviceStatusLabel('Claude', latestSnapshot.claude),
+    serviceStatusLabel('Codex', latestSnapshot.codex),
   ];
   tray.setToolTip(tooltipLines.join('\n'));
   rebuildTrayMenu();
@@ -129,8 +222,8 @@ function rebuildTrayMenu() {
   const c = utilizationFromSnapshot(latestSnapshot.claude);
   const x = utilizationFromSnapshot(latestSnapshot.codex);
   const menu = Menu.buildFromTemplate([
-    { label: `Claude 5h: ${percentLabel(c)}`, enabled: false },
-    { label: `Codex 5h:  ${percentLabel(x)}`, enabled: false },
+    { label: `Claude 5h: ${latestSnapshot.claude && !latestSnapshot.claude.ok ? errorSummary(latestSnapshot.claude.error) : percentLabel(c)}`, enabled: false },
+    { label: `Codex 5h:  ${latestSnapshot.codex && !latestSnapshot.codex.ok ? errorSummary(latestSnapshot.codex.error) : percentLabel(x)}`, enabled: false },
     { type: 'separator' },
     { label: '詳細を表示', click: () => togglePopover() },
     { label: '今すぐ更新', click: () => { void refreshNow(); } },
@@ -157,11 +250,11 @@ function rebuildTrayMenu() {
     {
       label: '更新間隔',
       submenu: [
-        { label: '30秒', type: 'radio', checked: getSettings().pollingIntervalSec === 30, click: () => setInterval(30) },
-        { label: '1分',  type: 'radio', checked: getSettings().pollingIntervalSec === 60, click: () => setInterval(60) },
-        { label: '2分',  type: 'radio', checked: getSettings().pollingIntervalSec === 120, click: () => setInterval(120) },
-        { label: '5分',  type: 'radio', checked: getSettings().pollingIntervalSec === 300, click: () => setInterval(300) },
-        { label: '10分', type: 'radio', checked: getSettings().pollingIntervalSec === 600, click: () => setInterval(600) },
+        { label: '30秒', type: 'radio', checked: getSettings().pollingIntervalSec === 30, click: () => setPollingInterval(30) },
+        { label: '1分',  type: 'radio', checked: getSettings().pollingIntervalSec === 60, click: () => setPollingInterval(60) },
+        { label: '2分',  type: 'radio', checked: getSettings().pollingIntervalSec === 120, click: () => setPollingInterval(120) },
+        { label: '5分',  type: 'radio', checked: getSettings().pollingIntervalSec === 300, click: () => setPollingInterval(300) },
+        { label: '10分', type: 'radio', checked: getSettings().pollingIntervalSec === 600, click: () => setPollingInterval(600) },
       ],
     },
     { type: 'separator' },
@@ -170,7 +263,7 @@ function rebuildTrayMenu() {
   tray.setContextMenu(menu);
 }
 
-function setInterval(seconds) {
+function setPollingInterval(seconds) {
   saveSettings({ pollingIntervalSec: seconds });
   restartPolling();
   sendSnapshotToRenderer();
@@ -178,16 +271,39 @@ function setInterval(seconds) {
 
 function openLoginTerminal(target) {
   // Spawn a new Windows Terminal / cmd window running the command so users can interact.
-  const cmd = target === 'claude' ? 'claude login' : 'codex login';
+  const exe = target === 'claude' ? resolveClaudeExecutable() : resolveCodexExecutable();
+  if (!exe) {
+    const name = target === 'claude' ? 'Claude Code' : 'Codex';
+    const envName = target === 'claude' ? 'CLAUDE_PATH' : 'CODEX_PATH';
+    const message = `${name} CLI が見つかりません。PATH に追加するか ${envName} に実行ファイルパスを設定してください。`;
+    logger.warn('[login] executable missing', target);
+    dialog.showErrorBox(`${name} CLI が見つかりません`, message);
+    return false;
+  }
   try {
-    // start.exe opens a detached console; using cmd /k keeps it open after exit so users can read errors.
-    spawn('cmd.exe', ['/c', 'start', '""', 'cmd.exe', '/k', cmd], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-    }).unref();
+    const lowered = exe.toLowerCase();
+    if (process.platform === 'win32' && lowered.endsWith('.ps1')) {
+      spawn('powershell.exe', ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', exe, 'login'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      }).unref();
+    } else if (process.platform === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', '""', 'cmd.exe', '/k', `"${exe}" login`], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      }).unref();
+    } else {
+      spawn(exe, ['login'], {
+        detached: true,
+        stdio: 'ignore',
+      }).unref();
+    }
+    return true;
   } catch (err) {
-    console.error('[login] failed to spawn', err);
+    logger.error('[login] failed to spawn', err);
+    return false;
   }
 }
 
@@ -199,6 +315,7 @@ function buildSnapshotForRenderer() {
     settings: getSettings(),
     autoLaunchEnabled: autoLaunch.isEnabled(),
     isPolling,
+    theme: currentTheme(),
   };
 }
 
@@ -233,6 +350,7 @@ function settled(res) {
     return { ok: true, data: res.value };
   }
   const err = res.reason || {};
+  logger.error('[poll] provider failed', err.code || 'unknown', err.message || String(err));
   return {
     ok: false,
     error: {
@@ -272,7 +390,7 @@ ipcMain.handle('refresh', async () => {
 });
 ipcMain.handle('set-interval', (_evt, seconds) => {
   if (settingsStore.ALLOWED_INTERVALS.includes(seconds)) {
-    setInterval(seconds);
+    setPollingInterval(seconds);
   }
   return buildSnapshotForRenderer();
 });
@@ -283,8 +401,7 @@ ipcMain.handle('set-auto-launch', (_evt, enabled) => {
   return buildSnapshotForRenderer();
 });
 ipcMain.handle('open-login', (_evt, target) => {
-  openLoginTerminal(target === 'codex' ? 'codex' : 'claude');
-  return true;
+  return openLoginTerminal(target === 'codex' ? 'codex' : 'claude');
 });
 ipcMain.handle('quit', () => { quitApp(); });
 
@@ -298,19 +415,33 @@ app.on('window-all-closed', (e) => {
 });
 
 app.whenReady().then(async () => {
+  logger.init(app.getPath('logs'));
+  logger.info('[app] ready');
+
   // Hide from taskbar
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.agent-limit-checker.app');
   }
 
+  if (getSettings().autoLaunch) {
+    autoLaunch.setEnabled(true);
+  }
+
   // Initial tray icon with no data → gray donuts.
-  tray = new Tray(buildTrayImage(null, null));
+  tray = new Tray(buildTrayImage(null, null, { scaleFactor: currentTrayScaleFactor() }));
   tray.setToolTip('Agent Limit Checker (起動中…)');
   tray.on('click', () => togglePopover());
   tray.on('double-click', () => togglePopover());
   rebuildTrayMenu();
 
   createPopoverWindow();
+
+  nativeTheme.on('updated', () => {
+    if (popoverWindow && !popoverWindow.isDestroyed()) {
+      popoverWindow.setBackgroundColor(popoverBackgroundColor());
+    }
+    sendSnapshotToRenderer();
+  });
 
   await refreshNow();
   restartPolling();

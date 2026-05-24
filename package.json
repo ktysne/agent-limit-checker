@@ -9,6 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
+    "generate-icon": "node scripts/generate-icon.js",
+    "test": "node --test \"test/*.test.js\"",
     "build": "electron-builder --win --x64"
   },
   "devDependencies": {
@@ -27,7 +29,8 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "assets/tray-icon.png"
+      "icon": "assets/app-icon.ico",
+      "signAndEditExecutable": false
     }
   }
 }

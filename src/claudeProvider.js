@@ -8,8 +8,9 @@ const https = require('node:https');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const REQUEST_TIMEOUT_MS = 12_000;
+const REFRESH_MARGIN_MS = 60_000;
 
-async function readAccessToken() {
+async function readCredentials() {
   let raw;
   try {
     raw = await fs.readFile(CREDENTIALS_PATH, 'utf8');
@@ -28,14 +29,15 @@ async function readAccessToken() {
   } catch (err) {
     throw makeError('claude_credentials_invalid', `認証ファイルの JSON が不正です: ${err.message}`);
   }
-  const token = parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken;
-  if (!token || typeof token !== 'string') {
+  const oauth = parsed && parsed.claudeAiOauth;
+  const token = oauth && oauth.accessToken;
+  if (!oauth || !token || typeof token !== 'string') {
     throw makeError(
       'claude_credentials_missing',
       'アクセストークンが見つかりません。`claude login` で再ログインしてください。',
     );
   }
-  return token;
+  return { raw: parsed, oauth, accessToken: token };
 }
 
 function makeError(code, message, extra) {
@@ -45,13 +47,14 @@ function makeError(code, message, extra) {
   return err;
 }
 
-function httpGetJson(url, headers) {
+function httpJson(url, options) {
   return new Promise((resolve, reject) => {
+    const body = options.body || null;
     const req = https.request(
       url,
       {
-        method: 'GET',
-        headers,
+        method: options.method || 'GET',
+        headers: options.headers,
         timeout: REQUEST_TIMEOUT_MS,
       },
       (res) => {
@@ -112,8 +115,17 @@ function httpGetJson(url, headers) {
       }
       reject(makeError('claude_network', `ネットワークエラー: ${err.message}`));
     });
+    if (body) req.write(body);
     req.end();
   });
+}
+
+function httpGetJson(url, headers) {
+  return httpJson(url, { method: 'GET', headers });
+}
+
+function httpPostJson(url, headers, body) {
+  return httpJson(url, { method: 'POST', headers, body });
 }
 
 function parseBucket(bucket) {
@@ -126,10 +138,9 @@ function parseBucket(bucket) {
   return { utilization, resetsAt };
 }
 
-async function fetch() {
-  const token = await readAccessToken();
+async function fetchUsage(accessToken) {
   const { json } = await httpGetJson(USAGE_URL, {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${accessToken}`,
     'anthropic-beta': 'oauth-2025-04-20',
     Accept: 'application/json',
     'User-Agent': 'agent-limit-checker/0.1.0',
@@ -142,8 +153,149 @@ async function fetch() {
   };
 }
 
+function normalizeExpiresAt(value, now = Date.now()) {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 10_000_000_000 ? n * 1000 : n;
+}
+
+function shouldRefresh(oauth, now = Date.now()) {
+  const expiresAt = normalizeExpiresAt(oauth && oauth.expiresAt, now);
+  return !!expiresAt && expiresAt <= now + REFRESH_MARGIN_MS;
+}
+
+function refreshConfig() {
+  const endpoint = process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT;
+  const clientId = process.env.CLAUDE_OAUTH_CLIENT_ID;
+  if (!endpoint || !clientId) return null;
+  return { endpoint, clientId };
+}
+
+function mergeRefreshResponse(existingOauth, json, now = Date.now()) {
+  const accessToken = json.accessToken || json.access_token;
+  if (!accessToken || typeof accessToken !== 'string') {
+    throw makeError('claude_refresh_invalid', 'OAuth refresh レスポンスに access token がありません。');
+  }
+
+  const refreshToken = json.refreshToken || json.refresh_token || existingOauth.refreshToken;
+  const expiresAt = normalizeExpiresAt(
+    json.expiresAt || json.expires_at,
+    now,
+  ) || (Number.isFinite(Number(json.expiresIn || json.expires_in))
+    ? now + Number(json.expiresIn || json.expires_in) * 1000
+    : existingOauth.expiresAt);
+
+  return {
+    ...existingOauth,
+    accessToken,
+    refreshToken,
+    expiresAt,
+    scopes: json.scopes || json.scope || existingOauth.scopes,
+  };
+}
+
+async function writeCredentials(rawCredentials, oauth) {
+  const next = {
+    ...rawCredentials,
+    claudeAiOauth: oauth,
+  };
+  const dir = path.dirname(CREDENTIALS_PATH);
+  const tmp = path.join(dir, `.credentials.${process.pid}.${Date.now()}.tmp`);
+  await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  await fs.rename(tmp, CREDENTIALS_PATH);
+}
+
+async function refreshAccessToken(credentials) {
+  const config = refreshConfig();
+  if (!config) {
+    throw makeError(
+      'claude_refresh_unconfigured',
+      'OAuth refresh は未設定です。`claude login` で再ログインしてください。',
+    );
+  }
+  const refreshToken = credentials.oauth && credentials.oauth.refreshToken;
+  if (!refreshToken || typeof refreshToken !== 'string') {
+    throw makeError(
+      'claude_refresh_token_missing',
+      'refresh token が見つかりません。`claude login` で再ログインしてください。',
+    );
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: config.clientId,
+  }).toString();
+
+  const { json } = await httpPostJson(config.endpoint, {
+    Accept: 'application/json',
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Content-Length': Buffer.byteLength(body),
+    'User-Agent': 'agent-limit-checker/0.1.0',
+  }, body);
+
+  const oauth = mergeRefreshResponse(credentials.oauth, json);
+  await writeCredentials(credentials.raw, oauth);
+  return { raw: { ...credentials.raw, claudeAiOauth: oauth }, oauth, accessToken: oauth.accessToken };
+}
+
+async function readFreshCredentialsIfChanged(previousAccessToken) {
+  const latest = await readCredentials();
+  if (latest.accessToken !== previousAccessToken) return latest;
+  return null;
+}
+
+async function fetch() {
+  let credentials = await readCredentials();
+
+  if (shouldRefresh(credentials.oauth)) {
+    try {
+      credentials = await refreshAccessToken(credentials);
+    } catch (err) {
+      if (err.code !== 'claude_refresh_unconfigured') throw err;
+    }
+  }
+
+  try {
+    return await fetchUsage(credentials.accessToken);
+  } catch (err) {
+    if (err.code !== 'claude_unauthorized') throw err;
+
+    const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
+    if (reread) {
+      try {
+        return await fetchUsage(reread.accessToken);
+      } catch (retryErr) {
+        if (retryErr.code !== 'claude_unauthorized') throw retryErr;
+      }
+    }
+
+    try {
+      const refreshed = await refreshAccessToken(credentials);
+      return await fetchUsage(refreshed.accessToken);
+    } catch (refreshErr) {
+      if (refreshErr.code && refreshErr.code.startsWith('claude_refresh_')) {
+        throw makeError(
+          'claude_unauthorized',
+          'Anthropic から認証エラー (401)。`claude login` で再ログインしてください。',
+        );
+      }
+      throw refreshErr;
+    }
+  }
+}
+
 async function shutdown() {
   // nothing persistent
 }
 
-module.exports = { fetch, shutdown };
+module.exports = {
+  fetch,
+  shutdown,
+  _private: {
+    mergeRefreshResponse,
+    normalizeExpiresAt,
+    shouldRefresh,
+  },
+};

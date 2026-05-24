@@ -12,9 +12,14 @@ function isEnabled() {
 
 function setEnabled(enabled) {
   try {
+    const args = ['--hidden'];
+    if (!app.isPackaged) {
+      args.unshift(app.getAppPath());
+    }
     app.setLoginItemSettings({
       openAtLogin: !!enabled,
-      args: ['--hidden'],
+      path: process.execPath,
+      args,
     });
     return true;
   } catch (err) {

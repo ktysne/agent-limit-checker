@@ -1,63 +1,66 @@
 # agent-limit-checker — 開発メモ / 残課題
 
-最終更新: 2026-05-24 (自律実装ターン)
+最終更新: 2026-05-24 (残課題対応ターン)
 
 ## 現状サマリ
 - Electron ベースで `npm start` するとシステムトレイに常駐し、左クリックでポップオーバー、右クリックでメニューが出る Windows 版を実装した。
 - 参考: macOS 版 [otoha1119/token-checker](https://github.com/otoha1119/token-checker) の挙動・API 仕様を踏襲。
-- **スモークテスト結果** (`node smoke-test.js`):
-  - **Claude**: 401 Unauthorized (`~/.claude/.credentials.json` の access token が 2026-05-20 に期限切れ → 約 3.5 日経過)。
-    - UI 上は「`claude login` を実行してください」のエラー文言で誘導している。
-    - ユーザが `claude login` を再実行すれば直る想定 (CLI が credentials.json を書き換えるため、本アプリは何もしなくて良い)。
-  - **Codex**: 実データ取得成功。`fiveHour.utilization=0.01 (1%)`, `weekly.utilization=0`。
+- **スモークテスト結果** (`node smoke-test.js`, `claude login` 実施後):
+  - **Claude**: 実データ取得成功。`fiveHour.utilization=0.06 (6%)`, `weekly.utilization=0.09 (9%)`。
+  - **Codex**: 実データ取得成功。`fiveHour.utilization=0.03 (3%)`, `weekly.utilization=0`。
 
 ## 既知の課題 / 後回しにした項目
 
-### A. Claude トークンの自動リフレッシュ (優先度: 高)
-- 現状: access token が切れると 401 のまま放置。ユーザに `claude login` を強いる。
-- 望ましい挙動: `~/.claude/.credentials.json` の `refreshToken` を使って自動更新する。
-- ブロッカー: Anthropic OAuth のリフレッシュ用エンドポイント URL と `client_id` が macOS 版のソースには含まれていなかった (Keychain から token を取ってくるだけで、refresh は Claude CLI 任せ)。Anthropic の公開仕様 or Claude CLI のソースを確認して以下を埋める必要あり:
-  - `POST <token_endpoint>`
-  - body: `grant_type=refresh_token&refresh_token=<rt>&client_id=<id>`
-- 暫定回避: 5 分おきのポーリングで 401 を検知 → タスクトレイの tooltip で「再ログインが必要」を強調表示する処理を入れても良い (今は popover でしか分からない)。
+### A. Claude トークンの自動リフレッシュ (対応済み / 制限あり)
+- 実装済み:
+  - `~/.claude/.credentials.json` の `expiresAt` を見て期限切れ直前を検知。
+  - 401 時に credentials を再読込し、CLI 側で更新済みの access token があれば 1 回だけ再試行。
+  - トレイ tooltip / コンテキストメニューに `login required` などのエラー状態を表示。
+  - OAuth refresh は `CLAUDE_OAUTH_TOKEN_ENDPOINT` と `CLAUDE_OAUTH_CLIENT_ID` が両方設定されている場合のみ有効化。
+- 残リスク:
+  - Anthropic の Claude Code 用 OAuth refresh endpoint / client_id は公式公開仕様として確認できていないため、既定では direct refresh しない。
+  - endpoint を設定しない場合、最終的な期限切れ復旧は `claude login` に委ねる。
 
-### B. Codex CLI の起動経路 (優先度: 中)
-- npm-global の `codex.cmd` を `cmd.exe /d /s /c "<path>" app-server` でラップして起動している。Node 20+ の CVE-2024-27980 対策で `.cmd` を直接 spawn できない (EINVAL) ためのワークアラウンド。
-- `windowsVerbatimArguments: true` を指定しているので、`exe` のパスに `"` が含まれているとコマンドラインが壊れる。通常の `%APPDATA%\npm\codex.cmd` なら問題なし。
-- TODO: `.exe` 形式の Codex (npm-global 経由でない) がリリースされた場合の検出を改善。
+### B. Codex CLI の起動経路 (対応済み)
+- `src/cliPaths.js` を追加し、`CODEX_PATH` → `codex.exe` → `codex.cmd` → `codex.bat` → `codex.ps1` → `codex` の順で探索。
+- VS Code 拡張に同梱される `openai.chatgpt-*/bin/windows-x86_64/codex.exe` も補助探索する。
+- `.cmd` / `.bat` は引き続き `cmd.exe` 経由で起動し、Node 20+ の直接 spawn 制限を回避。
 
-### C. トレイアイコンの描画 (優先度: 中)
+### C. トレイアイコンの描画 (対応済み)
 - `src/trayIcon.js` で 32x32 の生 BGRA bitmap を毎回生成して `nativeImage.createFromBitmap` に渡している。
   - macOS 版は SwiftUI ビューを `ImageRenderer` で焼き、ドーナツ + パーセント数字をメニューバーに直接出していた。
   - Windows 版 v1 はトレイアイコンに「2 つのドーナツ」だけを出し、パーセンテージは tooltip / コンテキストメニューに回している (Windows のトレイは文字を載せにくいため)。
-- TODO:
-  - High DPI (`scaleFactor`) 対応: 現在は scaleFactor=1 固定。複数 DPI で滲む可能性。
-  - アイコンセンターに小さな "C" / "X" マークを描いて Claude / Codex を識別しやすくする。
-  - エラー状態を視覚化 (grey + ❗ オーバーレイなど)。
+- 対応:
+  - `screen` から `scaleFactor` を取り、DPI に応じた bitmap を生成。
+  - Claude / Codex の中心に小さな `C` / `X` マークを描画。
+  - エラー状態は灰色ベース + 赤い `!` バッジで表示。
 
-### D. ポップオーバー UX (優先度: 中)
+### D. ポップオーバー UX (対応済み)
 - 起動時にトレイ近くにフレームレスウィンドウを表示。
 - フォーカスが外れると自動で hide (`blur`)。
-- TODO:
-  - ESC キーで閉じる。
-  - ウィンドウのアニメーション (フェード等)。
-  - ライト/ダークテーマの追従 (`nativeTheme.shouldUseDarkColors`)。今はダーク固定。
+- 対応:
+  - ESC キーで hide。
+  - 表示 / 非表示時に短いフェード。
+  - `nativeTheme.shouldUseDarkColors` を renderer に渡し、CSS variables でライト / ダークに追従。
 
-### E. 自動起動 (優先度: 中)
+### E. 自動起動 (対応済み / 注意点あり)
 - `app.setLoginItemSettings({openAtLogin: true, args:['--hidden']})` を使用。
-- 起動引数 `--hidden` は今は読んでいない。ログイン時に起動したときにポップオーバーが手前に出ないようにする必要があるかも (今はトレイのみ表示で、ポップオーバーは show=false で作っているので問題ない見込み)。
-- ⚠️ 自動起動を ON にした状態で「アプリの場所を移動」した場合、レジストリパスがズレるので動かなくなる。`electron-builder` で installer 化したらこの問題はほぼ解消する。
+- 起動引数 `--hidden` は今も明示的には読んでいないが、ポップオーバーは `show=false` で作るためログイン起動時も前面表示されない。
+- 起動時に settings 上 autoLaunch が有効なら `app.setLoginItemSettings` を再適用し、portable exe 移動後のパスずれを軽減。
+- ⚠️ アプリを移動した後、一度も手動起動しないまま次回ログインすると古いパスが残る可能性はある。installer 化が最終解。
 
-### F. ビルド / 配布 (優先度: 低)
-- `package.json` に `electron-builder` の `portable` 設定は入れたが、まだビルドしていない。
-- `npm run build` → `dist/AgentLimitChecker-<ver>.exe` (portable 単体実行) ができる想定。
-- TODO: 専用アイコン (`assets/tray-icon.png` or `.ico`) を用意。今は同梱していないので、ビルド時にエラーになる可能性大。
+### F. ビルド / 配布 (対応済み)
+- `assets/app-icon.ico` を追加し、`package.json` の `win.icon` を `.ico` に変更。
+- `npm run generate-icon` でアイコンを再生成できる。
+- `npm run build` → `dist/AgentLimitChecker 0.1.0.exe` (portable 単体実行) を確認済み。
+- この環境では `winCodeSign` 展開時に symlink 権限エラーが出るため、`win.signAndEditExecutable=false` で未署名 portable を生成する設定にしている。
+- TODO: 署名付きで配布する場合は Developer Mode / 管理者権限 / CI の署名環境で `signAndEditExecutable` を戻して確認。
 
 ### G. 他に未対応
 - **CLAUDE_API_KEY 経由**: macOS 版同様、本アプリも OAuth トークン経由でのみ動作。`ANTHROPIC_API_KEY` での代替ログインは未対応。
 - **multiple Codex プロファイル**: `rateLimitsByLimitId` を Sort して見る実装は入れているが、複数アカウントの選択 UI はなし。
-- **エラー観測**: 現状 `console.error` で stdout 出力するだけ。本格的にはログファイル (`app.getPath('logs')`) に書き出すべき。
-- **テスト**: 単体テストなし。`smoke-test.js` を手動実行する形。
+- **エラー観測**: `app.getPath('logs')/agent-limit-checker.log` に poll / login / tray 系エラーを書き出す最低限の logger を追加済み。
+- **テスト**: `npm test` で `node --test` を実行。Claude refresh 正規化と CLI 探索順の単体テストを追加済み。実接続は引き続き `node smoke-test.js`。
 - **i18n**: UI 文字列はすべて日本語ハードコード。
 
 ## ファイル構成
@@ -72,7 +75,14 @@ agent-limit-checker/
 │   ├── codexProvider.js     # spawn `codex app-server` + JSON-RPC `account/rateLimits/read`
 │   ├── settings.js          # userData/settings.json
 │   ├── autoLaunch.js        # app.setLoginItemSettings ラッパ
-│   └── trayIcon.js          # 32x32 ドーナツ bitmap 生成
+│   ├── cliPaths.js          # Claude/Codex CLI の探索
+│   ├── logger.js            # app logs への簡易ログ出力
+│   └── trayIcon.js          # DPI 対応ドーナツ bitmap 生成
+├── scripts/
+│   └── generate-icon.js     # Windows build 用 .ico 生成
+├── test/
+│   ├── claudeProvider.test.js
+│   └── cliPaths.test.js
 ├── renderer/
 │   ├── index.html
 │   ├── style.css

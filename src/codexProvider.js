@@ -1,9 +1,7 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
-const path = require('node:path');
-const os = require('node:os');
-const fs = require('node:fs');
+const { resolveCodexExecutable } = require('./cliPaths');
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const START_TIMEOUT_MS = 12_000;
@@ -13,38 +11,6 @@ function makeError(code, message, extra) {
   err.code = code;
   if (extra) Object.assign(err, extra);
   return err;
-}
-
-function resolveCodexExecutable() {
-  // 1. Honour CODEX_PATH override
-  const override = process.env.CODEX_PATH;
-  if (override && fs.existsSync(override)) return override;
-
-  // 2. Search PATH for codex.cmd / codex.exe / codex.ps1
-  const pathDirs = (process.env.PATH || '').split(path.delimiter);
-  const candidates = process.platform === 'win32'
-    ? ['codex.cmd', 'codex.exe', 'codex.ps1', 'codex']
-    : ['codex'];
-
-  for (const dir of pathDirs) {
-    if (!dir) continue;
-    for (const name of candidates) {
-      const candidate = path.join(dir, name);
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  // 3. Common Windows npm-global location
-  if (process.platform === 'win32') {
-    const npmCmd = path.join(process.env.APPDATA || '', 'npm', 'codex.cmd');
-    if (fs.existsSync(npmCmd)) return npmCmd;
-  }
-
-  return null;
 }
 
 class CodexClient {
