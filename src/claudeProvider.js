@@ -131,10 +131,18 @@ function httpPostJson(url, headers, body) {
 function parseBucket(bucket) {
   if (!bucket) return null;
   const utilization = typeof bucket.utilization === 'number' ? bucket.utilization / 100 : null;
+  if (utilization == null) return null;
+  // Anthropic returns `resets_at: null` for any window that has not yet been touched
+  // in the current period (seen on `five_hour` right after a reset, and routinely on
+  // `seven_day_sonnet` / `seven_day_omelette` etc.). That is "0% used, no countdown yet",
+  // NOT "data missing" — surface it as a bucket with utilization=0 and resetsAt=null
+  // so the UI can render it instead of falling through to N/A.
   const resetsAtRaw = bucket.resets_at;
-  if (utilization == null || !resetsAtRaw) return null;
-  const resetsAt = Date.parse(resetsAtRaw);
-  if (Number.isNaN(resetsAt)) return null;
+  let resetsAt = null;
+  if (resetsAtRaw) {
+    const parsed = Date.parse(resetsAtRaw);
+    if (!Number.isNaN(parsed)) resetsAt = parsed;
+  }
   return { utilization, resetsAt };
 }
 
@@ -297,5 +305,6 @@ module.exports = {
     mergeRefreshResponse,
     normalizeExpiresAt,
     shouldRefresh,
+    parseBucket,
   },
 };

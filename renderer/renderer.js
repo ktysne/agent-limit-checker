@@ -24,7 +24,9 @@ function percent(util) {
 
 function resetText(resetsAtMs) {
   const now = Date.now();
-  if (!resetsAtMs) return '';
+  // Anthropic は「このウィンドウでまだ消費していない」とき resets_at を null で返す。
+  // それは 0% / 未使用 を意味するので、進捗バーは出しつつタイマーだけ伏せる。
+  if (resetsAtMs == null) return 'ウィンドウ未開始 (このウィンドウでまだ消費なし)';
   if (resetsAtMs <= now) return 'まもなくリセット';
   const diffSec = Math.round((resetsAtMs - now) / 1000);
   const hours = Math.floor(diffSec / 3600);
