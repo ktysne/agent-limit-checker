@@ -1,4 +1,4 @@
-# agent-limit-checker (Windows port of token-checker)
+# agent-limit-checker
 
 Windows のシステムトレイに常駐し、**Claude Code** と **Codex** の API 使用率を可視化するアプリ。
 
