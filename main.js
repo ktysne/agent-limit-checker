@@ -333,6 +333,7 @@ function buildSnapshotForRenderer() {
     autoLaunchEnabled: autoLaunch.isEnabled(),
     isPolling,
     theme: currentTheme(),
+    appVersion: app.getVersion(),
   };
 }
 
@@ -433,7 +434,7 @@ app.on('window-all-closed', (e) => {
 
 app.whenReady().then(async () => {
   logger.init(app.getPath('logs'));
-  logger.info('[app] ready');
+  logger.info(`[app] ready v${app.getVersion()}`);
 
   // Hide from taskbar
   if (process.platform === 'win32') {

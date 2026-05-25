@@ -99,15 +99,16 @@ function escapeHtml(s) {
   })[c]);
 }
 
-function renderFooter(fetchedAt) {
+function renderFooter(fetchedAt, version) {
   const el = document.getElementById('last-updated');
   if (!el) return;
-  if (!fetchedAt) {
-    el.textContent = '';
-    return;
+  const parts = [];
+  if (version) parts.push(`v${version}`);
+  if (fetchedAt) {
+    const t = new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    parts.push(`最終更新: ${t}`);
   }
-  const t = new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  el.textContent = `最終更新: ${t}`;
+  el.textContent = parts.join(' · ');
 }
 
 function applyTheme(theme) {
@@ -119,7 +120,7 @@ function applySnapshot(payload) {
   applyTheme(payload.theme);
   renderService('claude', payload.claude);
   renderService('codex', payload.codex);
-  renderFooter(payload.fetchedAt);
+  renderFooter(payload.fetchedAt, payload.appVersion);
   if (payload.settings) {
     const sel = document.getElementById('interval-select');
     if (sel && String(payload.settings.pollingIntervalSec) !== sel.value) {
