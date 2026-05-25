@@ -4,11 +4,15 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const https = require('node:https');
+const { spawn } = require('node:child_process');
+
+const { resolveClaudeExecutable } = require('./cliPaths');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const REQUEST_TIMEOUT_MS = 12_000;
 const REFRESH_MARGIN_MS = 60_000;
+const CLI_NUDGE_TIMEOUT_MS = 15_000;
 
 async function readCredentials() {
   let raw;
@@ -278,15 +282,130 @@ async function readFreshCredentialsIfChanged(previousAccessToken) {
   return null;
 }
 
+// Spawn `claude auth status --json` non-interactively. The official CLI
+// handles its OAuth refresh internally — if the access token is expired but
+// the refresh token is still valid, the CLI will silently update
+// `~/.claude/.credentials.json`. We then re-read the file and retry.
+//
+// Returns `true` if the CLI reported `loggedIn: true` (so a retry has a
+// chance of succeeding), `false` otherwise. Never throws.
+function spawnClaudeAuthStatus(exe) {
+  const env = buildChildEnv(process.env);
+  const lowered = exe.toLowerCase();
+  if (lowered.endsWith('.ps1')) {
+    return spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', exe, 'auth', 'status', '--json'],
+      { stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true },
+    );
+  }
+  if (lowered.endsWith('.cmd') || lowered.endsWith('.bat')) {
+    return spawn(
+      process.env.ComSpec || 'cmd.exe',
+      ['/d', '/s', '/c', `"${exe}" auth status --json`],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      },
+    );
+  }
+  return spawn(exe, ['auth', 'status', '--json'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+    windowsHide: true,
+  });
+}
+
+function buildChildEnv(base) {
+  // Whitelist only the env vars Claude CLI needs. Crucially, do NOT pass
+  // `ANTHROPIC_API_KEY` — if that's set in the parent process the CLI uses
+  // it instead of OAuth, which defeats the purpose of refreshing the
+  // OAuth token.
+  const allow = [
+    'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+    'USERNAME', 'TEMP', 'TMP', 'SystemRoot', 'windir',
+    'PATH', 'PATHEXT', 'LANG', 'LC_ALL',
+    'CLAUDE_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'ComSpec',
+  ];
+  const env = {};
+  for (const k of allow) {
+    if (base[k] != null) env[k] = base[k];
+  }
+  return env;
+}
+
+async function nudgeClaudeRefresh() {
+  const exe = resolveClaudeExecutable();
+  if (!exe) return false;
+
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawnClaudeAuthStatus(exe);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const stdoutChunks = [];
+    proc.stdout.on('data', (c) => stdoutChunks.push(c));
+    proc.stderr.on('data', () => { /* drain */ });
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch { /* ignore */ }
+      resolve(false);
+    }, CLI_NUDGE_TIMEOUT_MS);
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    proc.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) { resolve(false); return; }
+      try {
+        const parsed = JSON.parse(Buffer.concat(stdoutChunks).toString('utf8'));
+        resolve(parsed && parsed.loggedIn === true);
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+}
+
+// Try every available avenue to obtain a usable access token. Returns the
+// (possibly-updated) credentials object on success, or the original
+// `credentials` if no avenue worked.
+async function tryRecoverCredentials(credentials) {
+  // 1) Direct OAuth refresh via env-var-configured endpoint.
+  try {
+    return await refreshAccessToken(credentials);
+  } catch (err) {
+    if (err.code !== 'claude_refresh_unconfigured'
+        && err.code !== 'claude_refresh_token_missing') {
+      throw err;
+    }
+    // fall through to CLI nudge
+  }
+
+  // 2) Spawn `claude auth status` — the CLI refreshes credentials.json
+  //    itself when the access token is expired and the refresh token is
+  //    still valid.
+  const nudged = await nudgeClaudeRefresh();
+  if (nudged) {
+    const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
+    if (reread) return reread;
+    // CLI says we're logged in but the file hasn't changed — token is still
+    // valid (or CLI didn't refresh). Return the original credentials and let
+    // the caller decide what to do.
+  }
+  return credentials;
+}
+
 async function fetch() {
   let credentials = await readCredentials();
 
   if (shouldRefresh(credentials.oauth)) {
-    try {
-      credentials = await refreshAccessToken(credentials);
-    } catch (err) {
-      if (err.code !== 'claude_refresh_unconfigured') throw err;
-    }
+    credentials = await tryRecoverCredentials(credentials);
   }
 
   const plan = extractPlanLabel(credentials.oauth);
@@ -297,6 +416,7 @@ async function fetch() {
   } catch (err) {
     if (err.code !== 'claude_unauthorized') throw err;
 
+    // 1) Another process may have already refreshed in the meantime.
     const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
     if (reread) {
       try {
@@ -304,9 +424,25 @@ async function fetch() {
         return { ...usage, plan: extractPlanLabel(reread.oauth) };
       } catch (retryErr) {
         if (retryErr.code !== 'claude_unauthorized') throw retryErr;
+        credentials = reread;
       }
     }
 
+    // 2) Nudge the CLI to refresh.
+    const nudged = await nudgeClaudeRefresh();
+    if (nudged) {
+      const afterNudge = await readFreshCredentialsIfChanged(credentials.accessToken);
+      if (afterNudge) {
+        try {
+          const usage = await fetchUsage(afterNudge.accessToken);
+          return { ...usage, plan: extractPlanLabel(afterNudge.oauth) };
+        } catch (retryErr) {
+          if (retryErr.code !== 'claude_unauthorized') throw retryErr;
+        }
+      }
+    }
+
+    // 3) Last resort: direct OAuth refresh via env vars.
     try {
       const refreshed = await refreshAccessToken(credentials);
       const usage = await fetchUsage(refreshed.accessToken);
@@ -336,5 +472,6 @@ module.exports = {
     shouldRefresh,
     parseBucket,
     extractPlanLabel,
+    buildChildEnv,
   },
 };
