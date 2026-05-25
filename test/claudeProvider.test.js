@@ -18,6 +18,24 @@ test('detects token refresh window from expiresAt', () => {
   assert.equal(_private.shouldRefresh({}, now), false);
 });
 
+test('buildChildEnv does NOT leak ANTHROPIC_API_KEY to the spawned Claude CLI', () => {
+  // If we passed ANTHROPIC_API_KEY through, the CLI would prefer it over the
+  // OAuth flow we're trying to refresh — which would silently break the
+  // refresh nudge. Allowlist must drop it.
+  const env = _private.buildChildEnv({
+    ANTHROPIC_API_KEY: 'sk-leaked',
+    OPENAI_API_KEY: 'sk-also-leaked',
+    PATH: 'C:\\Windows\\System32',
+    USERPROFILE: 'C:\\Users\\u',
+    HOME: '/home/u',
+  });
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.OPENAI_API_KEY, undefined);
+  assert.equal(env.PATH, 'C:\\Windows\\System32');
+  assert.equal(env.USERPROFILE, 'C:\\Users\\u');
+  assert.equal(env.HOME, '/home/u');
+});
+
 test('parseBucket keeps zero-utilization windows whose resets_at is null', () => {
   // Anthropic は「このウィンドウでまだ消費していない」とき resets_at: null を返す
   // (例: five_hour リセット直後、seven_day_sonnet など)。
