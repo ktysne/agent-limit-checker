@@ -39,32 +39,22 @@ function resetText(resetsAtMs) {
   return `あと ${rel} (${absolute} リセット)`;
 }
 
-function renderBucket(label, limit, primary = false) {
+function renderBucket(label, limit, { compact = false } = {}) {
+  const cls = compact ? 'bucket compact' : 'bucket';
   if (!limit) {
-    if (primary) {
-      return `<div class="bucket"><div class="bucket-row"><span class="bucket-label">${label}</span><span class="bucket-value">N/A</span></div></div>`;
-    }
-    return '';
+    return `<div class="${cls}"><div class="bucket-row"><span class="bucket-label">${label}</span><span class="bucket-value">N/A</span></div></div>`;
   }
-  const cls = classify(limit.utilization);
+  const colorCls = classify(limit.utilization);
   const pct = percent(limit.utilization);
   const width = Math.min(100, Math.max(0, (limit.utilization || 0) * 100));
-  if (primary) {
-    return `
-      <div class="bucket">
-        <div class="bucket-row">
-          <span class="bucket-label">${label}</span>
-          <span class="bucket-value ${cls}">${pct}</span>
-        </div>
-        <div class="progress"><div class="progress-fill ${cls}" style="width:${width}%"></div></div>
-        <div class="reset-text">${resetText(limit.resetsAt)}</div>
-      </div>
-    `;
-  }
   return `
-    <div class="secondary-row">
-      <span class="bucket-label">${label}</span>
-      <span class="bucket-value ${cls}">${pct}</span>
+    <div class="${cls}">
+      <div class="bucket-row">
+        <span class="bucket-label">${label}</span>
+        <span class="bucket-value ${colorCls}">${pct}</span>
+      </div>
+      <div class="progress"><div class="progress-fill ${colorCls}" style="width:${width}%"></div></div>
+      <div class="reset-text">${resetText(limit.resetsAt)}</div>
     </div>
   `;
 }
@@ -90,9 +80,12 @@ function renderService(target, svc) {
   }
   const usage = svc.data || {};
   let html = '';
-  html += renderBucket('5時間', usage.fiveHour, true) || '<div class="bucket"><div class="bucket-row"><span class="bucket-label">5時間ウィンドウのデータがありません</span></div></div>';
-  if (usage.weekly) html += renderBucket('週次', usage.weekly, false);
-  if (usage.weeklySonnet) html += renderBucket('週次 (Sonnet)', usage.weeklySonnet, false);
+  if (usage.plan) {
+    html += `<div class="plan-label">Plan: ${escapeHtml(usage.plan)}</div>`;
+  }
+  html += renderBucket('5時間', usage.fiveHour);
+  if (usage.weekly) html += renderBucket('週次', usage.weekly, { compact: true });
+  if (usage.weeklySonnet) html += renderBucket('週次 (Sonnet)', usage.weeklySonnet, { compact: true });
   body.innerHTML = html;
 }
 

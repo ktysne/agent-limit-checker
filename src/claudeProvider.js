@@ -161,6 +161,30 @@ async function fetchUsage(accessToken) {
   };
 }
 
+// Pretty-print the Claude subscription tier for the popover header.
+// Inputs we have observed in `~/.claude/.credentials.json#claudeAiOauth`:
+//   rateLimitTier      → "default_claude_max_5x", "default_claude_max_20x",
+//                        "default_claude_pro", "default_claude_team[s]"
+//   subscriptionType   → "max", "pro", "team", "free"
+// Prefer the tier (more specific — captures the 5x / 20x multiplier) and
+// fall back to subscriptionType.
+function extractPlanLabel(oauth) {
+  if (!oauth || typeof oauth !== 'object') return null;
+  const tier = typeof oauth.rateLimitTier === 'string' ? oauth.rateLimitTier : '';
+  const sub = typeof oauth.subscriptionType === 'string' ? oauth.subscriptionType : '';
+
+  const m = tier && tier.match(/claude[_-](pro|max|team[s]?|enterprise|free)(?:[_-](\d+x))?/i);
+  if (m) {
+    const base = m[1].toLowerCase().replace(/s$/, '');
+    const cap = base.charAt(0).toUpperCase() + base.slice(1);
+    return m[2] ? `${cap} ${m[2].toLowerCase()}` : cap;
+  }
+  if (sub) {
+    return sub.charAt(0).toUpperCase() + sub.slice(1).toLowerCase();
+  }
+  return null;
+}
+
 function normalizeExpiresAt(value, now = Date.now()) {
   if (value == null) return null;
   const n = Number(value);
@@ -265,15 +289,19 @@ async function fetch() {
     }
   }
 
+  const plan = extractPlanLabel(credentials.oauth);
+
   try {
-    return await fetchUsage(credentials.accessToken);
+    const usage = await fetchUsage(credentials.accessToken);
+    return { ...usage, plan };
   } catch (err) {
     if (err.code !== 'claude_unauthorized') throw err;
 
     const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
     if (reread) {
       try {
-        return await fetchUsage(reread.accessToken);
+        const usage = await fetchUsage(reread.accessToken);
+        return { ...usage, plan: extractPlanLabel(reread.oauth) };
       } catch (retryErr) {
         if (retryErr.code !== 'claude_unauthorized') throw retryErr;
       }
@@ -281,7 +309,8 @@ async function fetch() {
 
     try {
       const refreshed = await refreshAccessToken(credentials);
-      return await fetchUsage(refreshed.accessToken);
+      const usage = await fetchUsage(refreshed.accessToken);
+      return { ...usage, plan: extractPlanLabel(refreshed.oauth) };
     } catch (refreshErr) {
       if (refreshErr.code && refreshErr.code.startsWith('claude_refresh_')) {
         throw makeError(
@@ -306,5 +335,6 @@ module.exports = {
     normalizeExpiresAt,
     shouldRefresh,
     parseBucket,
+    extractPlanLabel,
   },
 };
