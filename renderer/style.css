@@ -147,8 +147,37 @@ html, body {
   font-size: 12px;
 }
 
+.plan-label {
+  font-size: 10px;
+  color: var(--muted);
+  margin: -2px 0 8px;
+  letter-spacing: 0.02em;
+}
+
 .bucket {
   margin-bottom: 8px;
+}
+
+.bucket.compact {
+  margin-bottom: 6px;
+}
+
+.bucket.compact .bucket-row {
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+.bucket.compact .bucket-value {
+  font-size: 11px;
+}
+
+.bucket.compact .progress {
+  height: 4px;
+}
+
+.bucket.compact .reset-text {
+  font-size: 9px;
+  margin-top: 2px;
 }
 
 .bucket:last-child {

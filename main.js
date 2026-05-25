@@ -22,7 +22,10 @@ if (!SINGLE_INSTANCE_LOCK) {
 // back into setBounds(): on Windows with display scaling != 100% Electron
 // rounds in device pixels and the window shrinks 1-2px every cycle.
 const POPOVER_WIDTH = 360;
-const POPOVER_HEIGHT = 520;
+// 560 (not 520) so the Claude section can comfortably show:
+//   service header + plan label + 5h bar + weekly bar + Sonnet weekly bar
+// plus the Codex section + settings + footer without overflow at 100% DPI.
+const POPOVER_HEIGHT = 560;
 
 let tray = null;
 let popoverWindow = null;

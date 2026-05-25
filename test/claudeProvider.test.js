@@ -42,6 +42,44 @@ test('parseBucket returns null when utilization is missing', () => {
   assert.equal(_private.parseBucket({}), null);
 });
 
+test('extractPlanLabel parses Claude rateLimitTier into a human label', () => {
+  // Observed in `~/.claude/.credentials.json`:
+  //   "rateLimitTier": "default_claude_max_5x"
+  assert.equal(
+    _private.extractPlanLabel({ rateLimitTier: 'default_claude_max_5x' }),
+    'Max 5x',
+  );
+  assert.equal(
+    _private.extractPlanLabel({ rateLimitTier: 'default_claude_max_20x' }),
+    'Max 20x',
+  );
+  assert.equal(
+    _private.extractPlanLabel({ rateLimitTier: 'default_claude_pro' }),
+    'Pro',
+  );
+  // "teams" with trailing s is normalized to "Team".
+  assert.equal(
+    _private.extractPlanLabel({ rateLimitTier: 'default_claude_teams' }),
+    'Team',
+  );
+});
+
+test('extractPlanLabel falls back to subscriptionType when tier is missing or unknown', () => {
+  assert.equal(
+    _private.extractPlanLabel({ subscriptionType: 'max' }),
+    'Max',
+  );
+  assert.equal(
+    _private.extractPlanLabel({
+      rateLimitTier: 'something_weird',
+      subscriptionType: 'pro',
+    }),
+    'Pro',
+  );
+  assert.equal(_private.extractPlanLabel({}), null);
+  assert.equal(_private.extractPlanLabel(null), null);
+});
+
 test('merges snake_case OAuth refresh response without dropping existing metadata', () => {
   const now = 1_000_000;
   const merged = _private.mergeRefreshResponse({

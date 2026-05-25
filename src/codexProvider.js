@@ -242,6 +242,30 @@ function windowToRateLimit(win) {
   return { utilization, resetsAt: win.resetsAt * 1000 };
 }
 
+// `account/rateLimits/read` returns `rateLimits.planType` (e.g. "plus", "pro",
+// "team", "free"). Some accounts have several profiles in `rateLimitsByLimitId`
+// instead; pick the first one in sorted key order so the choice is
+// deterministic across runs.
+function extractPlanLabel(dto) {
+  if (!dto || typeof dto !== 'object') return null;
+  let raw = null;
+  if (dto.rateLimits && typeof dto.rateLimits.planType === 'string') {
+    raw = dto.rateLimits.planType;
+  }
+  if (!raw && dto.rateLimitsByLimitId && typeof dto.rateLimitsByLimitId === 'object') {
+    const keys = Object.keys(dto.rateLimitsByLimitId).sort();
+    for (const k of keys) {
+      const snap = dto.rateLimitsByLimitId[k];
+      if (snap && typeof snap.planType === 'string') {
+        raw = snap.planType;
+        break;
+      }
+    }
+  }
+  if (!raw) return null;
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
 const client = new CodexClient();
 
 async function fetch() {
@@ -250,6 +274,7 @@ async function fetch() {
     fiveHour: windowToRateLimit(pickWindow(dto, 300)),
     weekly: windowToRateLimit(pickWindow(dto, 10080)),
     weeklySonnet: null,
+    plan: extractPlanLabel(dto),
   };
 }
 
@@ -259,4 +284,4 @@ async function shutdown() {
   } catch { /* ignore */ }
 }
 
-module.exports = { fetch, shutdown };
+module.exports = { fetch, shutdown, _private: { extractPlanLabel } };
