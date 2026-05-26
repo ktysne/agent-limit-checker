@@ -286,8 +286,16 @@ function setPollingInterval(seconds) {
   sendSnapshotToRenderer();
 }
 
+function loginArgsFor(target) {
+  // The Claude CLI has no top-level `login` subcommand — passing `login` to
+  // `claude` makes the CLI treat it as the first prompt and open an
+  // interactive chat session. The actual OAuth flow lives under `auth login`.
+  // Codex CLI on the other hand DOES have a top-level `login` subcommand.
+  return target === 'claude' ? ['auth', 'login'] : ['login'];
+}
+
 function openLoginTerminal(target) {
-  // Spawn a new Windows Terminal / cmd window running the command so users can interact.
+  // Spawn a new console window that runs the OAuth flow interactively.
   const exe = target === 'claude' ? resolveClaudeExecutable() : resolveCodexExecutable();
   if (!exe) {
     const name = target === 'claude' ? 'Claude Code' : 'Codex';
@@ -297,25 +305,40 @@ function openLoginTerminal(target) {
     dialog.showErrorBox(`${name} CLI が見つかりません`, message);
     return false;
   }
+  const cliArgs = loginArgsFor(target);
   try {
     const lowered = exe.toLowerCase();
     if (process.platform === 'win32' && lowered.endsWith('.ps1')) {
-      spawn('powershell.exe', ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', exe, 'login'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-      }).unref();
+      spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', exe, ...cliArgs],
+        { detached: true, stdio: 'ignore', windowsHide: false },
+      ).unref();
     } else if (process.platform === 'win32') {
-      spawn('cmd.exe', ['/c', 'start', '""', 'cmd.exe', '/k', `"${exe}" login`], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-      }).unref();
+      // We deliberately host the CLI under PowerShell -NoExit (not `cmd /k`).
+      // When Node assembles a Windows command line, a single arg that
+      // contains both a quoted path and additional words gets escaped as
+      // `"\"C:\path with quotes\" arg"`. `cmd /k` then strips the outer
+      // quotes by its own rules and ends up trying to launch a file whose
+      // *name itself contains quotes* — which produces the user-visible
+      // error:
+      //   '"C:\Users\..\claude.exe"' は、内部コマンドまたは外部コマンド…
+      // PowerShell single-quoted strings are literal, so we sidestep the
+      // entire mess.
+      const psQuoted = (s) => `'${String(s).replace(/'/g, "''")}'`;
+      const psArgs = [psQuoted(exe), ...cliArgs.map((a) => `'${a}'`)].join(' ');
+      spawn(
+        'cmd.exe',
+        [
+          '/c', 'start', '""',
+          'powershell.exe',
+          '-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+          '-Command', `& ${psArgs}`,
+        ],
+        { detached: true, stdio: 'ignore', windowsHide: false },
+      ).unref();
     } else {
-      spawn(exe, ['login'], {
-        detached: true,
-        stdio: 'ignore',
-      }).unref();
+      spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
     }
     return true;
   } catch (err) {
