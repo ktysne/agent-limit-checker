@@ -29,9 +29,13 @@ function resetText(resetsAtMs) {
   if (resetsAtMs == null) return 'ウィンドウ未開始 (このウィンドウでまだ消費なし)';
   if (resetsAtMs <= now) return 'まもなくリセット';
   const diffSec = Math.round((resetsAtMs - now) / 1000);
-  const hours = Math.floor(diffSec / 3600);
+  const days = Math.floor(diffSec / 86400);
+  const hours = Math.floor((diffSec % 86400) / 3600);
   const mins = Math.floor((diffSec % 3600) / 60);
-  const rel = hours > 0 ? `${hours}時間${mins}分` : `${mins}分`;
+  let rel;
+  if (days > 0) rel = `${days}日${hours}時間${mins}分`;
+  else if (hours > 0) rel = `${hours}時間${mins}分`;
+  else rel = `${mins}分`;
   const absolute = new Date(resetsAtMs).toLocaleString([], {
     hour: '2-digit',
     minute: '2-digit',
