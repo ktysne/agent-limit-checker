@@ -2,6 +2,8 @@
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeTheme } = require('electron');
 const path = require('node:path');
+const os = require('node:os');
+const fsp = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 
 const settingsStore = require('./src/settings');
@@ -10,6 +12,7 @@ const claudeProvider = require('./src/claudeProvider');
 const codexProvider = require('./src/codexProvider');
 const { buildTrayImage } = require('./src/trayIcon');
 const { resolveClaudeExecutable, resolveCodexExecutable } = require('./src/cliPaths');
+const { buildLoginPsCommand } = require('./src/loginCommand');
 const logger = require('./src/logger');
 
 const SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
@@ -27,11 +30,24 @@ const POPOVER_WIDTH = 360;
 // plus the Codex section + settings + footer without overflow at 100% DPI.
 const POPOVER_HEIGHT = 560;
 
+// Where each CLI persists its OAuth credentials. After an interactive
+// `login`, the CLI rewrites the file below — we watch it so we can refresh
+// (and surface) the restored state without the user reopening the app or
+// pressing the reload button.
+const CREDENTIAL_FILES = {
+  claude: path.join(os.homedir(), '.claude', '.credentials.json'),
+  codex: path.join(os.homedir(), '.codex', 'auth.json'),
+};
+const LOGIN_WATCH_INTERVAL_MS = 1_500;
+const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
+
 let tray = null;
 let popoverWindow = null;
 let pollTimer = null;
 let isPolling = false;
 let fadeTimer = null;
+// target -> { timer, deadline } while we wait for an interactive login to land.
+const loginWatchers = { claude: null, codex: null };
 let latestSnapshot = {
   claude: null, // {ok, data?, error?}
   codex: null,
@@ -154,10 +170,10 @@ function positionWindowNearTray() {
   popoverWindow.setContentSize(POPOVER_WIDTH, POPOVER_HEIGHT);
 }
 
-function togglePopover() {
+function showPopover() {
   const win = createPopoverWindow();
   if (win.isVisible()) {
-    hidePopover();
+    sendSnapshotToRenderer();
     return;
   }
   positionWindowNearTray();
@@ -167,6 +183,15 @@ function togglePopover() {
   win.focus();
   fadeWindowTo(win, 1);
   sendSnapshotToRenderer();
+}
+
+function togglePopover() {
+  const win = createPopoverWindow();
+  if (win.isVisible()) {
+    hidePopover();
+    return;
+  }
+  showPopover();
 }
 
 function utilizationFromSnapshot(svc) {
@@ -307,44 +332,89 @@ function openLoginTerminal(target) {
   }
   const cliArgs = loginArgsFor(target);
   try {
-    const lowered = exe.toLowerCase();
-    if (process.platform === 'win32' && lowered.endsWith('.ps1')) {
-      spawn(
-        'powershell.exe',
-        ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', exe, ...cliArgs],
-        { detached: true, stdio: 'ignore', windowsHide: false },
-      ).unref();
-    } else if (process.platform === 'win32') {
-      // We deliberately host the CLI under PowerShell -NoExit (not `cmd /k`).
-      // When Node assembles a Windows command line, a single arg that
-      // contains both a quoted path and additional words gets escaped as
-      // `"\"C:\path with quotes\" arg"`. `cmd /k` then strips the outer
-      // quotes by its own rules and ends up trying to launch a file whose
-      // *name itself contains quotes* — which produces the user-visible
-      // error:
-      //   '"C:\Users\..\claude.exe"' は、内部コマンドまたは外部コマンド…
-      // PowerShell single-quoted strings are literal, so we sidestep the
-      // entire mess.
-      const psQuoted = (s) => `'${String(s).replace(/'/g, "''")}'`;
-      const psArgs = [psQuoted(exe), ...cliArgs.map((a) => `'${a}'`)].join(' ');
+    if (process.platform === 'win32') {
+      // One unified path for .exe / .ps1 / .cmd / .bat: PowerShell's call
+      // operator `& 'path' args` launches all of them, and single-quoted
+      // strings are literal so a path that contains spaces or quotes can
+      // never be mis-parsed as a command name (the old `cmd /k` failure).
+      const psCommand = buildLoginPsCommand(exe, cliArgs);
       spawn(
         'cmd.exe',
         [
           '/c', 'start', '""',
           'powershell.exe',
-          '-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-          '-Command', `& ${psArgs}`,
+          '-NoProfile', '-ExecutionPolicy', 'Bypass',
+          '-Command', psCommand,
         ],
         { detached: true, stdio: 'ignore', windowsHide: false },
       ).unref();
     } else {
       spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
     }
+    // Watch the credential file so the app recovers on its own once the
+    // login lands — no reopen, no manual reload.
+    watchForLoginCompletion(target);
     return true;
   } catch (err) {
     logger.error('[login] failed to spawn', err);
     return false;
   }
+}
+
+async function fileSignature(filePath) {
+  try {
+    const st = await fsp.stat(filePath);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null; // missing / unreadable
+  }
+}
+
+function stopLoginWatcher(target) {
+  const w = loginWatchers[target];
+  if (w && w.timer) clearTimeout(w.timer);
+  loginWatchers[target] = null;
+}
+
+// Poll the target's credential file until it changes (login wrote new
+// tokens), then auto-refresh and surface the popover. Gives up after a few
+// minutes so an abandoned login doesn't leave a timer running forever.
+async function watchForLoginCompletion(target) {
+  const file = CREDENTIAL_FILES[target];
+  if (!file) return;
+  stopLoginWatcher(target); // a fresh click restarts the window
+  const baseline = await fileSignature(file);
+  const deadline = Date.now() + LOGIN_WATCH_TIMEOUT_MS;
+  // `self` lets a tick tell whether it has been superseded by a later click
+  // (or cancelled on quit) across its own `await`s.
+  const self = { timer: null, deadline };
+  loginWatchers[target] = self;
+
+  const tick = async () => {
+    if (loginWatchers[target] !== self) return; // superseded / cancelled
+    const sig = await fileSignature(file);
+    if (loginWatchers[target] !== self) return; // re-check after the await
+    if (sig != null && sig !== baseline) {
+      stopLoginWatcher(target);
+      logger.info('[login] credentials updated — auto-refreshing', target);
+      if (target === 'codex') {
+        // The long-lived `codex app-server` cached the logged-out state;
+        // drop it so the next fetch respawns with the new credentials.
+        try { codexProvider.shutdown(); } catch { /* ignore */ }
+      }
+      await refreshNow();
+      showPopover();
+      return;
+    }
+    if (Date.now() >= deadline) {
+      stopLoginWatcher(target);
+      logger.info('[login] watch timed out', target);
+      return;
+    }
+    self.timer = setTimeout(tick, LOGIN_WATCH_INTERVAL_MS);
+  };
+
+  self.timer = setTimeout(tick, LOGIN_WATCH_INTERVAL_MS);
 }
 
 function buildSnapshotForRenderer() {
@@ -415,6 +485,8 @@ function restartPolling() {
 
 function quitApp() {
   if (pollTimer) clearInterval(pollTimer);
+  stopLoginWatcher('claude');
+  stopLoginWatcher('codex');
   try { codexProvider.shutdown(); } catch { /* ignore */ }
   try { claudeProvider.shutdown(); } catch { /* ignore */ }
   if (tray) {
