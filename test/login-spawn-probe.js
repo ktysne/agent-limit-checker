@@ -12,6 +12,7 @@
 
 const { spawn } = require('node:child_process');
 const { resolveClaudeExecutable } = require('../src/cliPaths');
+const { buildLoginPsCommand } = require('../src/loginCommand');
 
 const exe = resolveClaudeExecutable();
 if (!exe) {
@@ -19,15 +20,20 @@ if (!exe) {
   process.exit(2);
 }
 
-// Build args exactly the way main.js#openLoginTerminal does for the .exe
-// branch, but swap `auth login` for `auth status --json` to keep the probe
-// non-interactive.
+// Show the exact command production would run for the real login flow
+// (auto-close on success). We do NOT spawn this one — it would open a browser.
+console.log('resolved exe:', exe);
+console.log('production login -Command:\n  ', buildLoginPsCommand(exe, ['auth', 'login']));
+
+// For the actual spawn, swap `auth login` for the side-effect-free
+// `auth status --json` and keep the window open (-NoExit) so a human can read
+// the JSON the CLI prints. This still exercises the cmd /c start → powershell
+// chain that the real button relies on.
 const psQuoted = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const cliArgs = ['auth', 'status', '--json'];
 const psArgs = [psQuoted(exe), ...cliArgs.map((a) => `'${a}'`)].join(' ');
 
-console.log('resolved exe:', exe);
-console.log('PowerShell -Command:', `& ${psArgs}`);
+console.log('probe -Command:', `& ${psArgs}`);
 
 const start = Date.now();
 const proc = spawn(
