@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('api', {
   setAutoLaunch: (enabled) => ipcRenderer.invoke('set-auto-launch', enabled),
   openLogin: (target) => ipcRenderer.invoke('open-login', target),
   quit: () => ipcRenderer.invoke('quit'),
+  // One-way: tell the main process how tall the rendered content actually is
+  // (CSS px) so it can size the window to fit — no scrollbar, no empty padding.
+  reportContentHeight: (height) => ipcRenderer.send('content-height', height),
   onSnapshot: (cb) => {
     const listener = (_evt, payload) => cb(payload);
     ipcRenderer.on('snapshot', listener);

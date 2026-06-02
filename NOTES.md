@@ -102,6 +102,20 @@
   - `positionWindowNearTray()` を `setPosition(x, y)` + `setContentSize(POPOVER_WIDTH, POPOVER_HEIGHT)` に変更。`getBounds → setBounds` のラウンドトリップを完全に廃止。
   - 既に縮んでしまった状態から復帰するための `setContentSize` を毎回実行。
 
+### I. ポップオーバーに小さなスクロールバーが出る問題 (対応済み, 2026-06-03)
+- 症状: タスクバー (トレイ) からアプリを開くと、ほんの少しだけスクロールでき、スクロールバーが出る。縦幅の整合性が少しおかしい。
+- 原因:
+  - ウィンドウ高さを `POPOVER_HEIGHT = 560` で固定 (`min/maxHeight` も同値ロック) していたが、コンテンツの実高さは状態によって変動する。
+  - Claude / Codex の両方がログイン済みで plan ラベル付きのとき、実コンテンツは約 563px になり 560px を超える → 小さなスクロールバーが出る。
+  - 逆にバーが少ない状態 (例: Claude のみ ~544px) では 560px が高すぎて下部に余白が出る。これが「縦幅の整合性がおかしい」の正体。
+  - 単一のハードコード高さでは全状態に整合できない。
+- 修正 (fit-to-content):
+  - renderer で `.container` の border-box 高さ (CSS px) を測り、`ResizeObserver` でコンテンツ変化のたびに `content-height` IPC で main に通知 (`preload.js` の `reportContentHeight`)。`Math.ceil` でサブピクセル由来の 1px スクロールを防止。
+  - main は受け取った高さを `POPOVER_MIN/MAX_HEIGHT` でクランプし、`setContentSize(POPOVER_WIDTH, popoverHeight)` でウィンドウをコンテンツちょうどに合わせる。`positionWindowNearTray()` も `popoverHeight` を参照してトレイに再アンカー。
+  - 高さは renderer の DOM 実測値 (絶対値) のみを使い、`getBounds → setBounds` のラウンドトリップは引き続き一切しない → セクション H の DPI 縮みは再発しない (コンテンツ高さはウィンドウ高さに依存しないのでフィードバックループも無し)。
+  - `BrowserWindow` の `min/maxHeight` ロックは撤去 (フィット時にクランプされてしまうため)。幅は `min/maxWidth` で固定のまま、`resizable: false` でユーザリサイズも不可。
+- 検証: `npx electron test/popover-fit-probe.js` が PASS。実 renderer + preload に最も背の高い現実的スナップショット (両者 plan + バー) を流し込み、旧 560px では `scrolls=true`、新フィット高 (563px) では `scrolls=false` を確認。
+
 ## ファイル構成
 ```
 agent-limit-checker/

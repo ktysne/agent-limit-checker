@@ -119,6 +119,29 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
 }
 
+// Report the real content height to the main process so the window can size
+// itself to fit. `.container` is the only rendered box (body has no
+// margin/padding), so its border-box height is exactly the viewport height we
+// need. Ceil so a sub-pixel fraction can't leave a 1px scrollbar.
+function reportContentHeight() {
+  if (!window.api || typeof window.api.reportContentHeight !== 'function') return;
+  const el = document.querySelector('.container');
+  if (!el) return;
+  window.api.reportContentHeight(Math.ceil(el.getBoundingClientRect().height));
+}
+
+// Re-measure whenever the content reflows (data arrives, an error box appears,
+// the theme/font changes, …). The window height is content-driven, not
+// viewport-driven, so this never feeds back into itself.
+function watchContentHeight() {
+  const el = document.querySelector('.container');
+  if (!el) return;
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => reportContentHeight()).observe(el);
+  }
+  reportContentHeight();
+}
+
 function applySnapshot(payload) {
   if (!payload) return;
   applyTheme(payload.theme);
@@ -168,6 +191,8 @@ async function init() {
   document.getElementById('quit-btn').addEventListener('click', () => {
     window.api.quit();
   });
+
+  watchContentHeight();
 }
 
 window.addEventListener('DOMContentLoaded', init);

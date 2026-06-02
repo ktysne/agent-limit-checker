@@ -21,14 +21,23 @@ if (!SINGLE_INSTANCE_LOCK) {
   process.exit(0);
 }
 
-// Popover dimensions are locked. We must NEVER feed BrowserWindow.getBounds()
-// back into setBounds(): on Windows with display scaling != 100% Electron
-// rounds in device pixels and the window shrinks 1-2px every cycle.
+// Popover WIDTH is locked; HEIGHT follows the rendered content. We must NEVER
+// feed BrowserWindow.getBounds() back into setBounds(): on Windows with display
+// scaling != 100% Electron rounds in device pixels and the window shrinks 1-2px
+// every cycle. The height instead comes from the renderer, which measures its
+// content box in CSS px and reports it over the 'content-height' IPC — an
+// absolute, idempotent value (never a getBounds round-trip), so the window fits
+// its content exactly without a scrollbar and without drifting.
 const POPOVER_WIDTH = 360;
-// 560 (not 520) so the Claude section can comfortably show:
-//   service header + plan label + 5h bar + weekly bar + Sonnet weekly bar
-// plus the Codex section + settings + footer without overflow at 100% DPI.
-const POPOVER_HEIGHT = 560;
+// First-paint height, used only until the renderer reports its measured content
+// height. Sized to comfortably hold the tallest Claude layout (header + plan
+// label + 5h + weekly + Sonnet weekly bars) so the very first frame never
+// scrolls before the fit-to-content resize lands.
+const POPOVER_DEFAULT_HEIGHT = 560;
+// Clamp the renderer-reported height so a measurement glitch can never blow the
+// window up or collapse it to nothing.
+const POPOVER_MIN_HEIGHT = 200;
+const POPOVER_MAX_HEIGHT = 900;
 
 // Where each CLI persists its OAuth credentials. After an interactive
 // `login`, the CLI rewrites the file below — we watch it so we can refresh
@@ -43,6 +52,9 @@ const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
 
 let tray = null;
 let popoverWindow = null;
+// Current popover content height (CSS px). Starts at the first-paint default
+// and tracks whatever the renderer last measured.
+let popoverHeight = POPOVER_DEFAULT_HEIGHT;
 let pollTimer = null;
 let isPolling = false;
 let fadeTimer = null;
@@ -74,11 +86,12 @@ function createPopoverWindow() {
   if (popoverWindow) return popoverWindow;
   popoverWindow = new BrowserWindow({
     width: POPOVER_WIDTH,
-    height: POPOVER_HEIGHT,
+    height: popoverHeight,
+    // Width stays pinned; height is driven by setContentSize from the measured
+    // content (no min/max height lock, or it would clamp the fit-to-content
+    // resize). resizable:false still blocks any user drag-resize.
     minWidth: POPOVER_WIDTH,
-    minHeight: POPOVER_HEIGHT,
     maxWidth: POPOVER_WIDTH,
-    maxHeight: POPOVER_HEIGHT,
     useContentSize: true,
     show: false,
     frame: false,
@@ -157,17 +170,36 @@ function positionWindowNearTray() {
   const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   const workArea = display.workArea;
   let x = Math.round(trayBounds.x + trayBounds.width / 2 - POPOVER_WIDTH / 2);
-  let y = Math.round(trayBounds.y - POPOVER_HEIGHT - 8);
+  let y = Math.round(trayBounds.y - popoverHeight - 8);
   if (y < workArea.y) {
     y = trayBounds.y + trayBounds.height + 8;
   }
   x = Math.max(workArea.x + 4, Math.min(workArea.x + workArea.width - POPOVER_WIDTH - 4, x));
-  y = Math.max(workArea.y + 4, Math.min(workArea.y + workArea.height - POPOVER_HEIGHT - 4, y));
+  y = Math.max(workArea.y + 4, Math.min(workArea.y + workArea.height - popoverHeight - 4, y));
   // setPosition only — do NOT round-trip getBounds() through setBounds() on
-  // fractional DPI displays. Also re-assert the content size every show so
-  // that we recover if a previous bad cycle already shrank us.
+  // fractional DPI displays. Also re-assert the content size every show so the
+  // window stays pinned to the latest measured height.
   popoverWindow.setPosition(x, y);
-  popoverWindow.setContentSize(POPOVER_WIDTH, POPOVER_HEIGHT);
+  popoverWindow.setContentSize(POPOVER_WIDTH, popoverHeight);
+}
+
+// The renderer measured its content box and told us how tall it is. Resize the
+// window to match so it fits exactly — no scrollbar, no leftover padding.
+function applyContentHeight(rawHeight) {
+  const h = Math.round(Number(rawHeight));
+  if (!Number.isFinite(h)) return;
+  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(POPOVER_MAX_HEIGHT, h));
+  if (clamped === popoverHeight) return; // no change → nothing to do
+  popoverHeight = clamped;
+  logger.info('[popover] fit to content height', clamped);
+  if (!popoverWindow || popoverWindow.isDestroyed()) return;
+  if (popoverWindow.isVisible()) {
+    // Re-anchor to the tray so the popover grows upward from it; this also
+    // re-asserts the new content size for us.
+    positionWindowNearTray();
+  } else {
+    popoverWindow.setContentSize(POPOVER_WIDTH, popoverHeight);
+  }
 }
 
 function showPopover() {
@@ -517,6 +549,7 @@ ipcMain.handle('open-login', (_evt, target) => {
   return openLoginTerminal(target === 'codex' ? 'codex' : 'claude');
 });
 ipcMain.handle('quit', () => { quitApp(); });
+ipcMain.on('content-height', (_evt, height) => applyContentHeight(height));
 
 app.on('second-instance', () => {
   togglePopover();
