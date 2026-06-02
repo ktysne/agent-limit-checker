@@ -48,6 +48,10 @@ html, body {
   color: var(--text);
   background: var(--bg);
   user-select: none;
+  /* The window is sized to fit the content (see renderer.js syncWindowHeight),
+     so this only ever hides the sub-pixel / fractional-DPI rounding gap — never
+     real content. It guarantees a scrollbar can never appear. */
+  overflow: hidden;
 }
 
 .container {

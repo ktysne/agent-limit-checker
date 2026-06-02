@@ -24,10 +24,12 @@ if (!SINGLE_INSTANCE_LOCK) {
 // Popover WIDTH is locked; HEIGHT follows the rendered content. We must NEVER
 // feed BrowserWindow.getBounds() back into setBounds(): on Windows with display
 // scaling != 100% Electron rounds in device pixels and the window shrinks 1-2px
-// every cycle. The height instead comes from the renderer, which measures its
-// content box in CSS px and reports it over the 'content-height' IPC — an
-// absolute, idempotent value (never a getBounds round-trip), so the window fits
-// its content exactly without a scrollbar and without drifting.
+// every cycle (see NOTES section H). The height instead comes from the renderer
+// over the 'content-height' IPC: it watches whether the content actually
+// overflows the viewport and grows the request until it fits (see NOTES section
+// I — setContentSize lands a few px short at fractional DPI, so a single
+// measured value isn't enough). We just clamp and apply whatever it asks for;
+// the renderer's loop converges, and we never round-trip getBounds().
 const POPOVER_WIDTH = 360;
 // First-paint height, used only until the renderer reports its measured content
 // height. Sized to comfortably hold the tallest Claude layout (header + plan
