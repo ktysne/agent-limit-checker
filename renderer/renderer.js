@@ -119,27 +119,53 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
 }
 
-// Report the real content height to the main process so the window can size
-// itself to fit. `.container` is the only rendered box (body has no
-// margin/padding), so its border-box height is exactly the viewport height we
-// need. Ceil so a sub-pixel fraction can't leave a 1px scrollbar.
-function reportContentHeight() {
+// Drive the window height from the actual rendered content so it fits with no
+// scrollbar and no empty gap. We can't just request `contentHeight`: on
+// fractional-DPI displays (125% / 150% / …) Electron's setContentSize lands a
+// few px short of what we ask, so a naive request still leaves the content
+// overflowing. Instead this is a self-correcting loop — it watches whether the
+// content actually overflows the viewport and grows the request until it
+// doesn't, then settles. Because it observes real overflow it needs no
+// per-DPI magic numbers.
+let requestedHeight = 0;
+
+function syncWindowHeight() {
   if (!window.api || typeof window.api.reportContentHeight !== 'function') return;
   const el = document.querySelector('.container');
   if (!el) return;
-  window.api.reportContentHeight(Math.ceil(el.getBoundingClientRect().height));
+  // `.container` is the only rendered box (body has no margin/padding), so its
+  // border-box height is exactly the viewport height we need to show.
+  const content = Math.ceil(el.getBoundingClientRect().height);
+  const viewport = window.innerHeight;
+  const overflow = Math.max(0, document.documentElement.scrollHeight - viewport);
+
+  let target = requestedHeight;
+  if (content > requestedHeight && content > viewport) {
+    target = content;                    // first paint, or content grew past us
+  } else if (overflow > 0) {
+    target = requestedHeight + overflow; // window too short — absorb the DPI deficit
+  } else if (viewport - content >= 2) {
+    target = content;                    // window taller than content — close the gap
+  }
+  target = Math.ceil(Math.max(1, target));
+  if (target !== requestedHeight) {
+    requestedHeight = target;
+    window.api.reportContentHeight(target);
+  }
 }
 
-// Re-measure whenever the content reflows (data arrives, an error box appears,
-// the theme/font changes, …). The window height is content-driven, not
-// viewport-driven, so this never feeds back into itself.
+// Re-sync whenever the content reflows (data arrives, an error box appears, …)
+// or the viewport changes (our own resize lands, or the window moves to a
+// display with a different scale factor). The monotonic grow/shrink with a 2px
+// hysteresis converges in a couple of frames without oscillating.
 function watchContentHeight() {
   const el = document.querySelector('.container');
   if (!el) return;
   if (typeof ResizeObserver === 'function') {
-    new ResizeObserver(() => reportContentHeight()).observe(el);
+    new ResizeObserver(() => syncWindowHeight()).observe(el);
   }
-  reportContentHeight();
+  window.addEventListener('resize', syncWindowHeight);
+  syncWindowHeight();
 }
 
 function applySnapshot(payload) {

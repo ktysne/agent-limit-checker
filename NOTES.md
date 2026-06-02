@@ -110,11 +110,16 @@
   - 逆にバーが少ない状態 (例: Claude のみ ~544px) では 560px が高すぎて下部に余白が出る。これが「縦幅の整合性がおかしい」の正体。
   - 単一のハードコード高さでは全状態に整合できない。
 - 修正 (fit-to-content):
-  - renderer で `.container` の border-box 高さ (CSS px) を測り、`ResizeObserver` でコンテンツ変化のたびに `content-height` IPC で main に通知 (`preload.js` の `reportContentHeight`)。`Math.ceil` でサブピクセル由来の 1px スクロールを防止。
-  - main は受け取った高さを `POPOVER_MIN/MAX_HEIGHT` でクランプし、`setContentSize(POPOVER_WIDTH, popoverHeight)` でウィンドウをコンテンツちょうどに合わせる。`positionWindowNearTray()` も `popoverHeight` を参照してトレイに再アンカー。
-  - 高さは renderer の DOM 実測値 (絶対値) のみを使い、`getBounds → setBounds` のラウンドトリップは引き続き一切しない → セクション H の DPI 縮みは再発しない (コンテンツ高さはウィンドウ高さに依存しないのでフィードバックループも無し)。
+  - main は受け取った高さを `POPOVER_MIN/MAX_HEIGHT` でクランプし、`setContentSize(POPOVER_WIDTH, popoverHeight)` でウィンドウをコンテンツに合わせる。`positionWindowNearTray()` も `popoverHeight` を参照してトレイに再アンカー。
+  - 高さは renderer の DOM 実測値のみを使い、`getBounds → setBounds` のラウンドトリップは引き続き一切しない → セクション H の DPI 縮みは再発しない。
   - `BrowserWindow` の `min/maxHeight` ロックは撤去 (フィット時にクランプされてしまうため)。幅は `min/maxWidth` で固定のまま、`resizable: false` でユーザリサイズも不可。
-- 検証: `npx electron test/popover-fit-probe.js` が PASS。実 renderer + preload に最も背の高い現実的スナップショット (両者 plan + バー) を流し込み、旧 560px では `scrolls=true`、新フィット高 (563px) では `scrolls=false` を確認。
+- ⚠ 重要 (1.4.0 で再発 → 2026-06-03 に再修正): 単純に `Math.ceil(content)` を送る初版では **分数 DPI で直らなかった**。
+  - 実機 (scaleFactor=1.5 / 150%) で計測すると、`setContentSize(360, 563)` を呼んでも実ビューポートは **556px** にしかならず (約 7px 不足)、563px のコンテンツが 7〜13px はみ出してスクロールバーが出続けていた。`getContentSize` の幅も 360→346 とズレており、Electron の非フレーム窓 + 分数 DPI での丸め (不可視 DWM フレーム由来と思われる) が原因。不足量は scaleFactor 依存なので固定値で補正できない。
+  - 対策 = **自己補正ループ + `overflow: hidden`**:
+    - `renderer.js#syncWindowHeight()` が `content` (= `.container` の高さ) と `overflow` (= `documentElement.scrollHeight - innerHeight`) を見て、はみ出していれば `requestedHeight + overflow` を要求して窓を伸ばし、余白が出れば縮める。`ResizeObserver` + `window` の `resize` で駆動し、2px ヒステリシスで 2〜3 フレーム (実測 5〜7 通知) で収束。実際のはみ出しを観測して詰めるので DPI 補正の固定値が不要。
+    - `style.css` の `html, body { overflow: hidden }` でスクロールバーを物理的に出さない。窓は常にコンテンツ以上のサイズに収束するので、隠れるのは収束途中のサブピクセル余白だけ (実コンテンツは欠けない)。
+    - `preload.js#reportContentHeight` で `content-height` を送るのは従来通り。
+- 検証: `npx electron test/popover-fit-probe.js [scaleFactor]` が PASS。スクリーンショットと同じ最も背の高いスナップショット (Sonnet が「ウィンドウ未開始…」の長行) を実 renderer + preload に流し、`force-device-scale-factor` で **1.0 / 1.25 / 1.5 / 2.0 すべて `scrollPx=0` かつ gap≤1px に収束** することを確認。
 
 ## ファイル構成
 ```

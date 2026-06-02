@@ -1,107 +1,98 @@
 'use strict';
 
-// Electron-process probe for the fit-to-content popover sizing. Run with:
-//   npx electron test/popover-fit-probe.js
+// Electron-process probe for the self-correcting fit-to-content popover sizing.
+//   npx electron test/popover-fit-probe.js [forcedScaleFactor]
 //
-// Loads the REAL renderer + preload, feeds it the tallest realistic snapshot
-// (Claude: plan + 5h + weekly + Sonnet weekly; Codex: 5h + weekly), and checks:
-//   1. the renderer reports its measured content height over 'content-height';
-//   2. the OLD fixed 560px height would have scrolled this content (the bug);
-//   3. after sizing the window to the reported height, nothing scrolls (the fix).
+// Loads the real renderer + preload with the user's screenshot snapshot and the
+// real sizing loop, responds to every 'content-height' report exactly like
+// main.js (clamp + setContentSize), SHOWS the window so we measure at the real
+// (or forced) display DPI, lets the loop converge, then asserts the content no
+// longer overflows the viewport (no scrollbar) and fits snugly (no big gap).
 
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, screen } = require('electron');
 
 const POPOVER_WIDTH = 360;
-const OLD_FIXED_HEIGHT = 560;
+const POPOVER_MIN_HEIGHT = 200;
+const POPOVER_MAX_HEIGHT = 900;
 
-const now = Date.now();
-const tallSnapshot = {
-  claude: {
-    ok: true,
-    data: {
-      plan: 'Max 20x',
-      fiveHour: { utilization: 0.42, resetsAt: now + 3 * 3600 * 1000 },
-      weekly: { utilization: 0.66, resetsAt: now + 5 * 86400 * 1000 },
-      weeklySonnet: { utilization: 0.33, resetsAt: now + 5 * 86400 * 1000 },
-    },
-  },
-  codex: {
-    ok: true,
-    data: {
-      plan: 'Plus',
-      fiveHour: { utilization: 0.5, resetsAt: now + 2 * 3600 * 1000 },
-      weekly: { utilization: 0.7, resetsAt: now + 4 * 86400 * 1000 },
-    },
-  },
-  fetchedAt: now,
-  settings: { pollingIntervalSec: 300 },
-  autoLaunchEnabled: false,
-  isPolling: false,
-  theme: 'dark',
-  appVersion: '0.0.0-probe',
-};
-
+const forced = Number(process.argv[2]);
+if (Number.isFinite(forced) && forced > 0) {
+  app.commandLine.appendSwitch('force-device-scale-factor', String(forced));
+}
 app.disableHardwareAcceleration();
 
-let reportedHeight = null;
-ipcMain.handle('get-snapshot', () => tallSnapshot);
-ipcMain.on('content-height', (_evt, h) => { reportedHeight = h; });
+const now = Date.now();
+const snapshot = {
+  claude: { ok: true, data: {
+    plan: 'Max 5x',
+    fiveHour: { utilization: 0.83, resetsAt: now + 41 * 60 * 1000 },
+    weekly: { utilization: 0.18, resetsAt: now + (16 * 3600 + 60) * 1000 },
+    weeklySonnet: { utilization: 0.0, resetsAt: null }, // long "ウィンドウ未開始…" line
+  } },
+  codex: { ok: true, data: {
+    plan: 'Plus',
+    fiveHour: { utilization: 0.80, resetsAt: now + (3600 + 28 * 60) * 1000 },
+    weekly: { utilization: 0.43, resetsAt: now + (5 * 86400 + 21 * 3600 + 39 * 60) * 1000 },
+  } },
+  fetchedAt: now, settings: { pollingIntervalSec: 600 }, autoLaunchEnabled: true,
+  isPolling: false, theme: 'dark', appVersion: '0.0.0-probe',
+};
 
-async function measureScroll(win) {
-  return win.webContents.executeJavaScript(`(() => {
-    const c = document.querySelector('.container');
-    return {
-      container: c ? c.getBoundingClientRect().height : null,
-      scrollHeight: document.documentElement.scrollHeight,
-      innerHeight: window.innerHeight,
-      scrolls: document.documentElement.scrollHeight > window.innerHeight,
-    };
-  })()`);
-}
+let win = null;
+let popoverHeight = 560;
+let reportCount = 0;
+
+ipcMain.handle('get-snapshot', () => snapshot);
+// Mirror main.js applyContentHeight: clamp the reported height and resize.
+ipcMain.on('content-height', (_evt, h) => {
+  reportCount += 1;
+  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(POPOVER_MAX_HEIGHT, Math.round(Number(h))));
+  if (!Number.isFinite(clamped) || clamped === popoverHeight) return;
+  popoverHeight = clamped;
+  if (win && !win.isDestroyed()) win.setContentSize(POPOVER_WIDTH, popoverHeight);
+});
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const measure = (w) => w.webContents.executeJavaScript(`new Promise((res) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => res({
+    container: document.querySelector('.container').getBoundingClientRect().height,
+    innerHeight: window.innerHeight,
+    scrollPx: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+  })));
+})`);
 
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({
-    width: POPOVER_WIDTH,
-    height: OLD_FIXED_HEIGHT,
-    minWidth: POPOVER_WIDTH,
-    maxWidth: POPOVER_WIDTH,
-    useContentSize: true,
-    show: false,
-    frame: false,
+  const sf = screen.getPrimaryDisplay().scaleFactor;
+  console.log(`# scaleFactor=${sf}${Number.isFinite(forced) && forced > 0 ? ' (forced)' : ''}`);
+
+  win = new BrowserWindow({
+    width: POPOVER_WIDTH, height: popoverHeight,
+    minWidth: POPOVER_WIDTH, maxWidth: POPOVER_WIDTH,
+    useContentSize: true, show: false, frame: false, resizable: false,
+    transparent: false, backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
+      contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
   });
+  try {
+    await win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  } catch (e) { console.log('loadFile error (ignored):', e && e.message); }
 
-  await win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  // Let DOMContentLoaded -> getSnapshot -> render -> ResizeObserver settle.
-  await wait(400);
+  win.setPosition(200, 120);
+  win.show();
+  await wait(700); // let the self-correcting loop converge
 
-  console.log(`# environment: contentSize=${JSON.stringify(win.getContentSize())}`);
-  console.log(`# renderer reported content height: ${reportedHeight}px`);
+  const m = await measure(win);
+  const gap = m.innerHeight - m.container;
+  console.log(`reports=${reportCount}  finalContentSize=${JSON.stringify(win.getContentSize())}`);
+  console.log(`content=${m.container.toFixed(2)}  innerHeight=${m.innerHeight}  scrollPx=${m.scrollPx.toFixed(2)}  gap=${gap.toFixed(2)}`);
 
-  // (2) Old behaviour: window pinned at 560 — does this content scroll?
-  win.setContentSize(POPOVER_WIDTH, OLD_FIXED_HEIGHT);
-  await wait(60);
-  const before = await measureScroll(win);
-  console.log(`\n## OLD fixed ${OLD_FIXED_HEIGHT}px`);
-  console.log(`   container=${before.container.toFixed(1)} innerHeight=${before.innerHeight} scrolls=${before.scrolls}`);
-
-  // (3) New behaviour: size to the reported height — should not scroll.
-  win.setContentSize(POPOVER_WIDTH, reportedHeight);
-  await wait(60);
-  const after = await measureScroll(win);
-  console.log(`\n## NEW fit-to-content ${reportedHeight}px`);
-  console.log(`   container=${after.container.toFixed(1)} innerHeight=${after.innerHeight} scrolls=${after.scrolls}`);
-
-  const pass = Number.isFinite(reportedHeight) && !after.scrolls && after.container <= after.innerHeight;
-  console.log(`\n${pass ? 'PASS' : 'FAIL'}: fit-to-content height ${pass ? 'removes' : 'does NOT remove'} the scrollbar`);
+  const noScroll = m.scrollPx < 0.5;
+  const snugFit = gap >= -0.5 && gap <= 4; // viewport just covers content
+  const pass = noScroll && snugFit;
+  console.log(`\n${pass ? 'PASS' : 'FAIL'}: ${noScroll ? 'no scrollbar' : 'STILL SCROLLS'}, ${snugFit ? 'snug fit' : 'bad gap'}`);
   win.destroy();
   app.exit(pass ? 0 : 1);
 });
