@@ -93,3 +93,21 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 ## アプリ稼働中の編集
 - ユーザがトレイで portable exe を動かしている間は **`requestSingleInstanceLock` のせいで `npm start` が即終了する**。修正検証で再起動が必要なときは、まずユーザに portable exe を終了してもらう。
 - 自動起動の Run キーやアプリ設定 (`%APPDATA%\agent-limit-checker\settings.json`) を読み書きする調査は、別 `appUserModelId` を使った probe (`test/login-item-probe.js` など) に倣う。
+
+---
+
+## AI 相互レビュー（Claude ↔ Codex）
+
+このリポジトリは汎用ツール [ai-cross-review](https://github.com/ktysne/ai-cross-review) を組み込んでいる（そのままコピーして使う vendoring 方式）。実装が一区切りしたら、**実装 → レビュー → 指摘対応 → 妥当性確認** の往復を Claude / Codex を入れ替えて回す。
+
+**実装完了後の起点（必須）**: 改修を一区切りしたら、完了にする前に次の 3 択を提示する（勝手にコミット / PR で締めない）。
+- **A. レビューを依頼**: `npm run review:codex`（codex は read-only でファイルを変えない）。結果を読んで修正し、もう一度 `npm run review:codex` で妥当性確認。
+- **B. レビューと修正を依頼**: `npm run review:codex:fix`（codex が作業ツリーを直接修正）。修正差分（`git diff`）をレビューしてから採用。
+- **C. 何もしない**。
+
+- レビュー観点 `.cross-review.md`（このリポ固有）は CLI が自動で添付する。
+- レビューと修正の往復は **最大 3 回まで**。指摘・対応・妥当性確認は **PR コメントに記録**する。
+- `npm run review:codex*` は codex がネットワークを使うため、サンドボックスを無効にして実行する。
+- 詳しい手順は [docs/cross-review.md](docs/cross-review.md) を参照。
+
+**取り込み（vendored）**: `tools/cross-review.js` / `docs/cross-review.md` / `.cross-review.example.md` は ai-cross-review からのコピーなので直接編集しない（更新は上書きコピー）。このリポで編集するのは `.cross-review.md`（観点）だけ。
