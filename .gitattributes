@@ -1,0 +1,3 @@
+# Markdown は強制改行に行末スペース 2 つ (ハード改行) を使うため、
+# git diff --check の trailing-whitespace 検出を md では無効化する。
+*.md whitespace=-blank-at-eol

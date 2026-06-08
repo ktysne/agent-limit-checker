@@ -218,7 +218,8 @@ node tools/cross-review.js subagent      # CLI を起動せずレビュー用プ
     （`git ls-files --others --exclude-standard -z` の各ファイルを `git diff --no-index` で新規ファイル差分にする。`-z`（NUL 区切り）で空白入りパスでも壊れない）
 - 申し送り（`--instructions <path>`）: レビュアー個別の重点指摘を**観点とは別系統**で足します（`REVIEWER_NOTES_HEADER` の見出し付きでプロンプトに追加。`.cross-review.md` は置き換えない）。  
   `--uncommitted` の未追跡収集からは、申し送りファイル自体を**絶対パスの突き合わせで除外**します。  
-- 引数解析・差分生成・プロンプト生成・観点解決・申し送り注入は `tests/cross-review.test.js` が担保します。
+- 引数解析・差分生成・プロンプト生成・観点解決・申し送り注入は `tests/cross-review.test.js`（vitest）が担保します。  
+  このテストは**取り込み先では任意**で、vitest を使うときだけ同梱します（同梱しなくても engine の振る舞いは upstream のテストが担保）。
 
 ## 観点チェックリスト（.cross-review.md）
 
@@ -240,6 +241,6 @@ node tools/cross-review.js subagent      # CLI を起動せずレビュー用プ
 ## メンテナンス
 
 - レビュー観点を増やしたり減らしたりしたら `.cross-review.md` を更新します。  
-- CLI の対象範囲（`--staged` など）を増やすときは `tests/cross-review.test.js` も更新します。  
+- CLI の対象範囲（`--staged` など）を増やすときは、（テストを同梱しているなら）`tests/cross-review.test.js` も更新します。  
 - 運用ルールの要約はコピー先の `CLAUDE.md` / `AGENTS.md`（あれば）に置きます。  
   このドキュメントが正本なので、内容を二重に書きません（要約からはここへリンクします）。
