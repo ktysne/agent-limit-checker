@@ -47,7 +47,7 @@ const POPOVER_MAX_HEIGHT = 900;
 // pressing the reload button.
 const CREDENTIAL_FILES = {
   claude: path.join(os.homedir(), '.claude', '.credentials.json'),
-  codex: path.join(os.homedir(), '.codex', 'auth.json'),
+  codex: codexProvider.authFilePath(),
 };
 const LOGIN_WATCH_INTERVAL_MS = 1_500;
 const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
