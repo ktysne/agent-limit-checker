@@ -1,6 +1,9 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { resolveCodexExecutable } = require('./cliPaths');
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -13,6 +16,75 @@ function makeError(code, message, extra) {
   return err;
 }
 
+// codex persists its OAuth credentials here (honoring CODEX_HOME like the CLI).
+// The long-lived `app-server` reads this once at startup and caches the tokens
+// in memory.
+function codexAuthFile() {
+  const home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  return path.join(home, 'auth.json');
+}
+
+// A cheap fingerprint of auth.json. When it changes, some *other* codex process
+// rewrote the credentials (see CodexClient.readRateLimits) and the tokens our
+// app-server cached at startup are stale.
+function authSignature() {
+  try {
+    const st = fs.statSync(codexAuthFile());
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null; // missing / unreadable — treat as "unknown", never force a restart
+  }
+}
+
+// Errors a freshly respawned app-server can recover from: the long-lived
+// process crashed/exited, or the rate-limit read came back 401 /
+// token_invalidated because the cached OAuth token was invalidated out from
+// under us (refresh-token rotation triggered by another codex process —
+// `codex login`, the cross-review `codex exec`, etc.). We respawn (re-reading
+// auth.json) and retry once.
+function isRestartableError(err) {
+  if (!err) return false;
+  if (err.code === 'codex_process_exited') return true;
+  if (err.code !== 'codex_rpc_error') return false;
+  if (err.restartable === true) return true;
+  return isAuthErrorText(err.message);
+}
+
+function isAuthErrorText(text) {
+  return /401|unauthor|token_invalid|invalid_grant|sign(?:ed|ing)?\s*in/i.test(
+    String(text || ''),
+  );
+}
+
+function errorText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  const parts = [];
+  if (typeof value.message === 'string') parts.push(value.message);
+  try {
+    parts.push(JSON.stringify(value));
+  } catch {
+    parts.push(String(value));
+  }
+  return parts.join(' ');
+}
+
+function makeCodexRpcError(rawError) {
+  const restartable = isAuthErrorText(errorText(rawError));
+  const message = restartable
+    ? 'Codex の認証が失効しています。ログインし直してください。'
+    : 'Codex RPC エラー: rate limit の取得に失敗しました';
+  return makeError('codex_rpc_error', message, { restartable });
+}
+
+// Long-lived JSON-RPC client over a single `codex app-server` child process.
+//
+// The app-server caches the OAuth tokens it read from auth.json at startup. If
+// any *other* codex process refreshes those credentials, refresh-token rotation
+// invalidates the cached token and our reads start failing with 401 /
+// token_invalidated (and the app-server may then exit). readRateLimits guards
+// against this two ways: it respawns when auth.json changes under us, and it
+// respawns + retries once when a read fails with a restartable error.
 class CodexClient {
   constructor() {
     this.proc = null;
@@ -21,6 +93,8 @@ class CodexClient {
     this.stdoutBuffer = '';
     this.initializing = null;
     this.lastError = null;
+    // auth.json fingerprint captured when the current app-server was started.
+    this.authSignature = null;
   }
 
   async ensureStarted() {
@@ -78,12 +152,20 @@ class CodexClient {
       this.stdoutBuffer = '';
 
       proc.stdout.setEncoding('utf8');
-      proc.stdout.on('data', (chunk) => this._onStdout(chunk));
+      // All handlers are bound to *this* proc and ignore events once it has been
+      // replaced (a restart respawns before the old process's exit/data events
+      // drain) so a stale event can't null out the new proc or corrupt its
+      // stdout buffer.
+      proc.stdout.on('data', (chunk) => {
+        if (this.proc !== proc) return;
+        this._onStdout(chunk);
+      });
       proc.stderr.on('data', () => {
         // drain only; do not propagate noise but capture last line for diagnostics
       });
-      proc.on('exit', (code) => this._onExit(code));
+      proc.on('exit', (code) => this._onExit(proc, code));
       proc.on('error', (err) => {
+        if (this.proc !== proc) return;
         this.lastError = err;
         this._failAll(makeError('codex_process_exited', `codex app-server プロセスエラー: ${err.message}`));
       });
@@ -95,6 +177,9 @@ class CodexClient {
       };
       await this._request('initialize', initParams, START_TIMEOUT_MS);
       this._sendNotification('initialized', {});
+      // Snapshot auth.json *after* the handshake so we can tell later whether
+      // another codex process rotated the credentials under us.
+      this.authSignature = authSignature();
     })();
 
     try {
@@ -116,15 +201,43 @@ class CodexClient {
     this._failAll(makeError('codex_process_exited', 'codex app-server を停止しました。'));
     this.proc = null;
     this.stdoutBuffer = '';
+    this.authSignature = null;
   }
 
   async readRateLimits() {
     await this.ensureStarted();
+    // If another codex process rewrote auth.json since our app-server started
+    // (cross-review's `codex exec`, a fresh `codex login`, ...), the cached
+    // tokens are stale — respawn first so we read the new credentials instead of
+    // hitting a 401 on the request below.
+    if (this.authSignature != null) {
+      const sig = authSignature();
+      if (sig != null && sig !== this.authSignature) {
+        await this._restart();
+      }
+    }
+    try {
+      return await this._readOnce();
+    } catch (err) {
+      if (!isRestartableError(err)) throw err;
+      // Stale-token or crashed app-server: respawn with fresh credentials and
+      // retry exactly once so a single rotation can't wedge us until restart.
+      await this._restart();
+      return await this._readOnce();
+    }
+  }
+
+  async _readOnce() {
     const envelope = await this._request('account/rateLimits/read', {}, REQUEST_TIMEOUT_MS);
     if (!envelope || envelope.result == null) {
       throw makeError('codex_rpc_error', 'account/rateLimits/read のレスポンスに result がありません');
     }
     return envelope.result;
+  }
+
+  async _restart() {
+    this.stop();
+    await this.ensureStarted();
   }
 
   _request(method, params, timeoutMs) {
@@ -180,7 +293,7 @@ class CodexClient {
           clearTimeout(entry.timer);
           this.pending.delete(msg.id);
           if (msg.error) {
-            entry.reject(makeError('codex_rpc_error', `Codex RPC エラー: ${msg.error.message || JSON.stringify(msg.error)}`));
+            entry.reject(makeCodexRpcError(msg.error));
           } else {
             entry.resolve(msg);
           }
@@ -190,8 +303,10 @@ class CodexClient {
     }
   }
 
-  _onExit(code) {
+  _onExit(proc, code) {
+    if (this.proc !== proc) return; // stale exit from a process we already replaced
     this.proc = null;
+    this.authSignature = null;
     this._failAll(makeError('codex_process_exited', `codex app-server が終了しました (exit ${code})`));
   }
 
@@ -284,4 +399,9 @@ async function shutdown() {
   } catch { /* ignore */ }
 }
 
-module.exports = { fetch, shutdown, _private: { extractPlanLabel } };
+module.exports = {
+  fetch,
+  shutdown,
+  authFilePath: codexAuthFile,
+  _private: { codexAuthFile, extractPlanLabel, isRestartableError, makeCodexRpcError },
+};
