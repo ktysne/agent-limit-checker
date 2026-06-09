@@ -89,6 +89,8 @@ A / B でレビューを回す前に **PR を作ります**（無ければ先に
 
 > `npm run review:codex*` / `npm run review:claude` はレビュアー CLI がネットワーク/API 接続を使うため、サンドボックス内では接続に失敗することがあります。  
 > ネットワークを許可し、必要に応じてサンドボックスを無効にして実行してください。
+> CLI が PATH で見えていても、API 接続だけがサンドボックスで止まることがあります。  
+> 例: `claude --version` は成功するが `claude -p "Reply with OK only."` が無応答 / `ConnectionRefused` になり、ネットワーク許可・サンドボックス外では成功する場合、原因は CLI 不在ではなく実行環境のネットワーク制限です。
 
 ## 実装完了後の起点（Codex 主導）
 
@@ -139,6 +141,7 @@ B は、確定した指摘をクリーンな文脈で機械的に適用したい
 
 **見分け方**: 対象レビュアー CLI（`codex` または `claude`）が PATH で見つからない（`Get-Command <cli>` / `which <cli>` が失敗する）か、クラウド実行だと分かっているとき。  
 `npm run review:codex*` / `npm run review:claude` が CLI 不在、ネットワーク不可、API 接続不可で失敗したときも、この代替に切り替えます。
+CLI と API 接続を切り分ける場合は、まず `Get-Command claude` / `claude --version`（または `codex --version`）で CLI 可視性を確認し、次に `claude -p "Reply with OK only."` のような最小 API 呼び出しを通常環境とネットワーク許可環境で比較します。
 
 **仕組み**: プロンプトを組み立てる部分（観点の解決・差分の収集・モード別の指示付け）は **node と git だけ**で動くので、クラウド環境でもそのまま使えます。  
 外部 CLI を起動する部分だけを「Agent ツール等の客観レビュー用エージェント」に置き換えます。  

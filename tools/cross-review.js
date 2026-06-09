@@ -45,8 +45,9 @@
 // - claude の --uncommitted は Codex の --uncommitted (staged+unstaged+untracked) と結果を
 //   揃えるため、tracked 変更 (git diff HEAD) に加えて未追跡ファイルも new file 差分として含める。
 // - 前提: codex / claude レビュアーは「スタンドアロン CLI」が PATH にあること
-//   (VS Code プラグイン / デスクトップアプリとは別物)。Claude Code から実行する場合は
-//   codex がネットワークを使うため Bash をサンドボックス無効で起動する (cross-review フロー ドキュメント参照)。
+//   (VS Code プラグイン / デスクトップアプリとは別物)。CLI レビューはレビュアー CLI が
+//   ネットワーク/API 接続を使うため、必要に応じてサンドボックス無効・ネットワーク許可で起動する
+//   (cross-review フロー ドキュメント参照)。
 //   subagent レビュアーは外部 CLI を起動しない (プロンプトを stdout に出すだけ) ので CLI 不要。
 
 'use strict';
@@ -358,12 +359,59 @@ function reviewerInvocation(opts) {
   return { cmd: 'claude', args: ['-p'], notice: 'Claude でレビューを実行します...\n' };
 }
 
+function isPathLikeCommand(cmd) {
+  return path.isAbsolute(cmd) || cmd.includes('/') || cmd.includes('\\');
+}
+
+function isDirectWindowsExecutable(cmd) {
+  return ['.exe', '.com'].includes(path.extname(cmd).toLowerCase());
+}
+
+function isWindowsShellWrapper(cmd) {
+  return ['.cmd', '.bat'].includes(path.extname(cmd).toLowerCase());
+}
+
+function defaultWindowsCommandLookup(cmd) {
+  const res = spawnSync('where.exe', [cmd], { encoding: 'utf8' });
+  if (res.status !== 0 || !res.stdout) return [];
+  return res.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+// Windows では PowerShell の Get-Command が .ps1 shim を返すことがある一方、
+// where.exe では実行可能な .exe も見えることがある。直接起動できる .exe/.com を優先し、
+// 見つからない場合だけ shell 経由にフォールバックする。これにより claude.exe 環境では
+// shell:true と args の組み合わせに対する Node の警告を避けられる。
+function resolveReviewerCommandForSpawn(cmd, deps = {}) {
+  const platform = deps.platform || process.platform;
+  if (platform !== 'win32') return { cmd, shell: false };
+  if (isPathLikeCommand(cmd)) {
+    return { cmd, shell: !isDirectWindowsExecutable(cmd) };
+  }
+
+  const lookup = deps.lookup || defaultWindowsCommandLookup;
+  const candidates = lookup(cmd);
+  const direct = candidates.find(isDirectWindowsExecutable);
+  if (direct) return { cmd: direct, shell: false };
+
+  const shellWrapper = candidates.find(isWindowsShellWrapper);
+  if (shellWrapper) return { cmd: shellWrapper, shell: true };
+
+  // .ps1 は cmd.exe では直接実行できないため、このフォールバックは環境依存。
+  // npm グローバルインストールは通常 .cmd shim も作るので、実運用ではまずそこを使う。
+  return { cmd: candidates[0] || cmd, shell: true };
+}
+
 // レビュアー CLI を起動し、stdin にプロンプトを流し込む。出力は端末へそのまま流す。
+// Windows では起動直前に where.exe で実体を解決し、可能なら shell を使わずに起動する。
 function spawnReviewer(cmd, args, stdinText) {
-  const child = spawn(cmd, args, {
+  const resolved = resolveReviewerCommandForSpawn(cmd);
+  const child = spawn(resolved.cmd, args, {
     stdio: ['pipe', 'inherit', 'inherit'],
-    // Windows では codex/claude が .cmd シムのことが多く、shell 経由でないと解決できない。
-    shell: process.platform === 'win32',
+    // Windows では .cmd/.bat shim のことがあるため、その場合だけ shell 経由にする。
+    shell: resolved.shell,
   });
   child.on('error', (err) => {
     if (err && err.code === 'ENOENT') {
@@ -458,6 +506,7 @@ module.exports = {
   runReview,
   loadChecklist,
   loadInstructions,
+  resolveReviewerCommandForSpawn,
   CHECKLIST_FILENAME,
   GENERIC_CHECKLIST,
   REVIEW_ONLY_INSTRUCTION,
