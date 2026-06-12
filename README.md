@@ -18,6 +18,11 @@ npm start
 - 右クリック → 更新間隔・自動起動・ログイン・終了などのメニュー
 - 既定のポーリング間隔は 5 分
 - エラー時はトレイ tooltip / メニューにも `login required` などを表示
+- ntfy アプリで購読する Topic URL を設定すると、5時間 / 週次リセット時刻のスマホ通知を個別に opt-in できます
+
+## ntfy 通知
+スマホ側の ntfy アプリで推測されにくいトピックを購読し、その Topic URL (例: `https://ntfy.sh/your-random-topic`) を設定してください。
+保護された自前サーバーやアカウント付きトピックへ送る場合は、任意で Access token も設定できます。
 
 ## Claude OAuth refresh
 既定では Claude Code CLI が更新した `~/.claude/.credentials.json` を読み直して復旧します。
@@ -55,6 +60,24 @@ npm run dev
 # → ポップオーバーを開いてから Ctrl+Shift+I で DevTools
 ```
 
-`npm run build` は `dist/AgentLimitChecker 0.1.0.exe` を生成します。現在の設定はローカル portable ビルド優先で、Windows 署名/EXE メタデータ編集は無効です。
+`npm run build` は `dist/AgentLimitChecker <version>.exe` を生成します。現在の設定はローカル portable ビルド優先で、Windows 署名/EXE メタデータ編集は無効です。
+
+## リリース
+PR では `package.json` の `version` を変更せず、リリースしたいタイミングでまとめて bump します。
+バグ修正や中小機能追加は patch ではなく minor として扱います。
+
+```powershell
+# minor リリース (バグ修正 / 中小機能追加)
+npm run release:minor
+
+# major リリース (大きな機能変更)
+npm run release:major
+
+# 作成された release commit と tag を push
+git push
+git push --tags
+```
+
+`npm run release:*` は `npm version <level> -m "chore: release v%s"` を実行し、`package.json` の version bump、`chore: release vX.Y.0` コミット、`vX.Y.0` tag の作成をまとめて行います。
 
 詳細仕様 / 既知の課題 / 残タスクは [`NOTES.md`](./NOTES.md) を参照。

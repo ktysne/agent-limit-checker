@@ -119,6 +119,46 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
 }
 
+function setInputValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el || document.activeElement === el) return;
+  const next = String(value || '');
+  if (el.value !== next) el.value = next;
+}
+
+function setChecked(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.checked = !!value;
+}
+
+function renderNtfyStatus(config) {
+  const el = document.getElementById('ntfy-status');
+  if (!el) return;
+  const topicUrl = config && config.topicUrl;
+  const anyEnabled = !!(config && (config.notifyFiveHour || config.notifyWeekly));
+  if (!anyEnabled) {
+    el.textContent = '通知は未選択です。Topic URL は推測されにくいものを使ってください。';
+  } else if (!topicUrl) {
+    el.textContent = '通知を送るには ntfy の Topic URL が必要です。';
+  } else {
+    el.textContent = '通知予約が有効です。リセット時刻に ntfy へ送信します。';
+  }
+}
+
+function renderNtfySettings(config = {}) {
+  setInputValue('ntfy-topic-url', config.topicUrl);
+  setInputValue('ntfy-access-token', config.accessToken);
+  setChecked('ntfy-notify-five-hour', config.notifyFiveHour);
+  setChecked('ntfy-notify-weekly', config.notifyWeekly);
+  renderNtfyStatus(config);
+}
+
+async function saveNtfySettings(partial) {
+  if (!window.api || typeof window.api.setNtfySettings !== 'function') return;
+  const snap = await window.api.setNtfySettings(partial);
+  applySnapshot(snap);
+}
+
 // Drive the window height from the actual rendered content so it fits with no
 // scrollbar and no empty gap. We can't just request `contentHeight`: on
 // fractional-DPI displays (125% / 150% / …) Electron's setContentSize lands a
@@ -179,6 +219,7 @@ function applySnapshot(payload) {
     if (sel && String(payload.settings.pollingIntervalSec) !== sel.value) {
       sel.value = String(payload.settings.pollingIntervalSec);
     }
+    renderNtfySettings(payload.settings.ntfy || {});
   }
   const al = document.getElementById('auto-launch');
   if (al) {
@@ -205,6 +246,26 @@ async function init() {
   document.getElementById('auto-launch').addEventListener('change', async (evt) => {
     const snap = await window.api.setAutoLaunch(evt.target.checked);
     applySnapshot(snap);
+  });
+
+  document.getElementById('ntfy-form').addEventListener('submit', (evt) => {
+    evt.preventDefault();
+  });
+
+  document.getElementById('ntfy-topic-url').addEventListener('change', (evt) => {
+    void saveNtfySettings({ topicUrl: evt.target.value });
+  });
+
+  document.getElementById('ntfy-access-token').addEventListener('change', (evt) => {
+    void saveNtfySettings({ accessToken: evt.target.value });
+  });
+
+  document.getElementById('ntfy-notify-five-hour').addEventListener('change', (evt) => {
+    void saveNtfySettings({ notifyFiveHour: evt.target.checked });
+  });
+
+  document.getElementById('ntfy-notify-weekly').addEventListener('change', (evt) => {
+    void saveNtfySettings({ notifyWeekly: evt.target.checked });
   });
 
   document.querySelectorAll('[data-login]').forEach((btn) => {

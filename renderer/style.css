@@ -289,6 +289,62 @@ html, body {
   font-size: 12px;
 }
 
+.setting-row select:focus-visible,
+.setting-field input:focus-visible,
+.switch input:focus-visible + .slider {
+  outline: 2px solid #4caf50;
+  outline-offset: 2px;
+}
+
+.settings-group {
+  border-top: 1px solid var(--field-border);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+
+.settings-group fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-group legend {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+  padding: 0;
+}
+
+.setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--label);
+  font-size: 11px;
+}
+
+.setting-field input {
+  width: 100%;
+  background: var(--field);
+  color: var(--text);
+  border: 1px solid var(--field-border);
+  border-radius: 4px;
+  padding: 5px 6px;
+  font-size: 12px;
+  user-select: text;
+}
+
+.setting-hint {
+  min-height: 14px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .switch {
   position: relative;
   display: inline-block;

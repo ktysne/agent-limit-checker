@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   refresh: () => ipcRenderer.invoke('refresh'),
   setInterval: (seconds) => ipcRenderer.invoke('set-interval', seconds),
   setAutoLaunch: (enabled) => ipcRenderer.invoke('set-auto-launch', enabled),
+  setNtfySettings: (partial) => ipcRenderer.invoke('set-ntfy-settings', partial),
   openLogin: (target) => ipcRenderer.invoke('open-login', target),
   quit: () => ipcRenderer.invoke('quit'),
   // One-way: tell the main process how tall the rendered content actually is

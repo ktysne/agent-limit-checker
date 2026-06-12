@@ -59,6 +59,34 @@
           <span class="slider"></span>
         </label>
       </div>
+      <form id="ntfy-form" class="settings-group" action="#" method="post" autocomplete="off">
+        <fieldset>
+          <legend>ntfy 通知</legend>
+          <label class="setting-field" for="ntfy-topic-url">
+            <span>Topic URL</span>
+            <input type="url" id="ntfy-topic-url" name="ntfy-topic-url" placeholder="https://ntfy.sh/your-topic" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="setting-field" for="ntfy-access-token">
+            <span>Access token (任意)</span>
+            <input type="password" id="ntfy-access-token" name="ntfy-access-token" spellcheck="false" autocomplete="off">
+          </label>
+          <div class="setting-row">
+            <label for="ntfy-notify-five-hour">5時間リセットを通知</label>
+            <label class="switch">
+              <input type="checkbox" id="ntfy-notify-five-hour" name="ntfy-notify-five-hour">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label for="ntfy-notify-weekly">週次リセットを通知</label>
+            <label class="switch">
+              <input type="checkbox" id="ntfy-notify-weekly" name="ntfy-notify-weekly">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div id="ntfy-status" class="setting-hint" aria-live="polite"></div>
+        </fieldset>
+      </form>
     </section>
 
     <footer class="footer">
