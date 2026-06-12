@@ -1,5 +1,8 @@
 'use strict';
 
+// Auth error codes for which an automatic silent re-auth is attempted by main.
+const AUTO_REAUTH_CODES = new Set(['claude_unauthorized', 'claude_credentials_missing']);
+
 const ERROR_HINTS = {
   claude_credentials_missing: '🔑 ボタンを押すと再ログインできます。完了すると自動で復帰します。',
   claude_unauthorized: 'OAuth トークンが無効です。🔑 ボタンから再ログインすると自動で復帰します。',
@@ -63,7 +66,7 @@ function renderBucket(label, limit, { compact = false } = {}) {
   `;
 }
 
-function renderService(target, svc) {
+function renderService(target, svc, loginInProgress) {
   const body = document.querySelector(`[data-body="${target}"]`);
   if (!body) return;
   if (!svc) {
@@ -72,6 +75,17 @@ function renderService(target, svc) {
   }
   if (!svc.ok) {
     const err = svc.error || {};
+    // When an automatic silent re-auth is already in flight, show a
+    // "reconnecting" indicator instead of the static error hint.
+    if (loginInProgress && AUTO_REAUTH_CODES.has(err.code)) {
+      body.innerHTML = `
+        <div class="error-box">
+          <div class="error-title">⟳ 自動再認証中...</div>
+          <div class="error-message">ブラウザが開きます。完了後に自動で復帰します。</div>
+        </div>
+      `;
+      return;
+    }
     const hint = ERROR_HINTS[err.code] ? `<div class="error-message">${escapeHtml(ERROR_HINTS[err.code])}</div>` : '';
     body.innerHTML = `
       <div class="error-box">
@@ -171,8 +185,9 @@ function watchContentHeight() {
 function applySnapshot(payload) {
   if (!payload) return;
   applyTheme(payload.theme);
-  renderService('claude', payload.claude);
-  renderService('codex', payload.codex);
+  const loginInProgress = payload.loginInProgress || {};
+  renderService('claude', payload.claude, loginInProgress.claude);
+  renderService('codex', payload.codex, loginInProgress.codex);
   renderFooter(payload.fetchedAt, payload.appVersion);
   if (payload.settings) {
     const sel = document.getElementById('interval-select');

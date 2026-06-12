@@ -51,6 +51,10 @@ const CREDENTIAL_FILES = {
 };
 const LOGIN_WATCH_INTERVAL_MS = 1_500;
 const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
+// Minimum gap between automatic silent re-auth attempts for the same provider.
+const AUTO_LOGIN_COOLDOWN_MS = 10 * 60_000;
+// Auth errors that warrant an automatic silent re-auth attempt.
+const CLAUDE_AUTH_ERROR_CODES = new Set(['claude_unauthorized', 'claude_credentials_missing']);
 
 let tray = null;
 let popoverWindow = null;
@@ -62,6 +66,8 @@ let isPolling = false;
 let fadeTimer = null;
 // target -> { timer, deadline } while we wait for an interactive login to land.
 const loginWatchers = { claude: null, codex: null };
+// Timestamp of the last automatic silent re-auth attempt per provider.
+const lastAutoLoginMs = { claude: 0, codex: 0 };
 let latestSnapshot = {
   claude: null, // {ok, data?, error?}
   codex: null,
@@ -395,6 +401,40 @@ function openLoginTerminal(target) {
   }
 }
 
+// Like openLoginTerminal but runs the CLI with no visible window.
+// The CLI itself still opens the user's browser for the OAuth flow.
+// Used for automatic re-auth triggered by a detected auth error.
+function openLoginSilent(target) {
+  const exe = target === 'claude' ? resolveClaudeExecutable() : resolveCodexExecutable();
+  if (!exe) {
+    logger.warn('[login] silent: executable missing', target);
+    return false;
+  }
+  const cliArgs = loginArgsFor(target);
+  try {
+    if (process.platform === 'win32') {
+      // PowerShell call operator handles .exe / .ps1 / .cmd / .bat alike.
+      // -WindowStyle Hidden keeps the window off-screen; windowsHide:true
+      // suppresses the console allocation so nothing flashes on screen.
+      const sq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+      const invoke = ['&', sq(exe), ...cliArgs.map(sq)].join(' ');
+      spawn(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', invoke],
+        { detached: true, stdio: 'ignore', windowsHide: true },
+      ).unref();
+    } else {
+      spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
+    }
+    watchForLoginCompletion(target);
+    logger.info('[login] silent re-auth triggered', target);
+    return true;
+  } catch (err) {
+    logger.error('[login] silent spawn failed', err);
+    return false;
+  }
+}
+
 async function fileSignature(filePath) {
   try {
     const st = await fsp.stat(filePath);
@@ -459,6 +499,10 @@ function buildSnapshotForRenderer() {
     settings: getSettings(),
     autoLaunchEnabled: autoLaunch.isEnabled(),
     isPolling,
+    loginInProgress: {
+      claude: !!loginWatchers.claude,
+      codex: !!loginWatchers.codex,
+    },
     theme: currentTheme(),
     appVersion: app.getVersion(),
   };
@@ -486,6 +530,20 @@ async function refreshNow() {
     fetchedAt: Date.now(),
   };
   isPolling = false;
+
+  // Auto-trigger a silent re-auth when Claude reports an auth error, no login
+  // watcher is already running, and the cooldown since the last attempt has
+  // elapsed. This lets the app recover on its own without a manual button click.
+  const claudeErrCode = latestSnapshot.claude?.error?.code;
+  if (
+    CLAUDE_AUTH_ERROR_CODES.has(claudeErrCode)
+    && !loginWatchers.claude
+    && Date.now() - lastAutoLoginMs.claude > AUTO_LOGIN_COOLDOWN_MS
+  ) {
+    lastAutoLoginMs.claude = Date.now();
+    openLoginSilent('claude');
+  }
+
   updateTray();
   sendSnapshotToRenderer();
 }
