@@ -124,7 +124,7 @@ function formatResetTime(resetsAt) {
 function buildResetMessage(event) {
   const resetTime = formatResetTime(event.resetsAt);
   return {
-    title: `Agent Limit Checker: ${event.windowLabel}リセット`,
+    title: 'Agent Limit Checker',
     message: `${event.serviceLabel} の${event.windowLabel}リセット時刻です。\n${resetTime}`,
     priority: 'default',
     tags: 'hourglass',

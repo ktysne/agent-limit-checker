@@ -119,6 +119,15 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
 }
 
+function setSettingsPanelOpen(open) {
+  const panel = document.getElementById('settings-panel');
+  const toggle = document.getElementById('settings-toggle');
+  if (!panel || !toggle) return;
+  panel.hidden = !open;
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  syncWindowHeight();
+}
+
 function setInputValue(id, value) {
   const el = document.getElementById(id);
   if (!el || document.activeElement === el) return;
@@ -231,6 +240,11 @@ async function init() {
   const snapshot = await window.api.getSnapshot();
   applySnapshot(snapshot);
   window.api.onSnapshot(applySnapshot);
+
+  document.getElementById('settings-toggle').addEventListener('click', () => {
+    const panel = document.getElementById('settings-panel');
+    setSettingsPanelOpen(!!(panel && panel.hidden));
+  });
 
   document.getElementById('refresh-btn').addEventListener('click', async () => {
     const snap = await window.api.refresh();

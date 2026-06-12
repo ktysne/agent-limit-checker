@@ -11,6 +11,7 @@
     <header class="header">
       <h1>Agent Limit Checker</h1>
       <div class="header-buttons">
+        <button id="settings-toggle" class="icon-btn" title="設定" aria-controls="settings-panel" aria-expanded="false">⚙</button>
         <button id="refresh-btn" class="icon-btn" title="今すぐ更新">⟳</button>
       </div>
     </header>
@@ -41,7 +42,10 @@
       </div>
     </section>
 
-    <section class="settings">
+    <section id="settings-panel" class="settings" aria-labelledby="settings-title" hidden>
+      <div class="settings-head">
+        <h2 id="settings-title">設定</h2>
+      </div>
       <div class="setting-row">
         <label for="interval-select">更新間隔</label>
         <select id="interval-select">
