@@ -9,6 +9,8 @@ const ERROR_HINTS = {
   codex_rpc_error: '🔑 ボタンを押すと再ログインできます。完了すると自動で復帰します。',
 };
 
+const AUTO_REAUTH_CODES = new Set(['claude_unauthorized', 'claude_credentials_missing']);
+
 function classify(util) {
   if (util == null) return 'ok';
   if (util < 0.7) return 'ok';
@@ -63,7 +65,7 @@ function renderBucket(label, limit, { compact = false } = {}) {
   `;
 }
 
-function renderService(target, svc) {
+function renderService(target, svc, loginInProgress) {
   const body = document.querySelector(`[data-body="${target}"]`);
   if (!body) return;
   if (!svc) {
@@ -72,6 +74,15 @@ function renderService(target, svc) {
   }
   if (!svc.ok) {
     const err = svc.error || {};
+    if (loginInProgress && AUTO_REAUTH_CODES.has(err.code)) {
+      body.innerHTML = `
+        <div class="error-box">
+          <div class="error-title">⟳ 再認証中…</div>
+          <div class="error-message">ブラウザで Anthropic の承認画面が開きます。完了すると自動で復帰します。</div>
+        </div>
+      `;
+      return;
+    }
     const hint = ERROR_HINTS[err.code] ? `<div class="error-message">${escapeHtml(ERROR_HINTS[err.code])}</div>` : '';
     body.innerHTML = `
       <div class="error-box">
@@ -220,8 +231,9 @@ function watchContentHeight() {
 function applySnapshot(payload) {
   if (!payload) return;
   applyTheme(payload.theme);
-  renderService('claude', payload.claude);
-  renderService('codex', payload.codex);
+  const loginInProgress = payload.loginInProgress || {};
+  renderService('claude', payload.claude, loginInProgress.claude);
+  renderService('codex', payload.codex, loginInProgress.codex);
   renderFooter(payload.fetchedAt, payload.appVersion);
   if (payload.settings) {
     const sel = document.getElementById('interval-select');

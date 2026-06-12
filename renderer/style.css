@@ -277,6 +277,12 @@ html, body {
   gap: 8px;
 }
 
+/* display:flex above overrides the UA stylesheet's [hidden]{display:none},
+   so we must explicitly restore it here for the hidden attribute to work. */
+.settings[hidden] {
+  display: none;
+}
+
 .settings-head {
   display: flex;
   align-items: center;

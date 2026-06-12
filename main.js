@@ -13,7 +13,7 @@ const codexProvider = require('./src/codexProvider');
 const { NtfyResetNotifier } = require('./src/ntfyNotifier');
 const { buildTrayImage } = require('./src/trayIcon');
 const { resolveClaudeExecutable, resolveCodexExecutable } = require('./src/cliPaths');
-const { buildLoginPsCommand } = require('./src/loginCommand');
+const { buildLoginPsCommand, buildSilentPsCommand } = require('./src/loginCommand');
 const logger = require('./src/logger');
 
 const SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
@@ -53,6 +53,23 @@ const CREDENTIAL_FILES = {
 const LOGIN_WATCH_INTERVAL_MS = 1_500;
 const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
 
+// --- Deferred Claude re-auth (design decision) ---------------------------
+// A persistent Claude auth error can only be fixed by a full interactive
+// `claude auth login`, which OPENS THE USER'S BROWSER. We must NEVER trigger
+// that from the background polling loop (PR #18 did, and the browser popped
+// open spontaneously — rejected). Instead the polling loop only RECORDS that a
+// re-auth is pending (`claudeReauthPending`); the browser-opening login is
+// started solely in response to the user opening the popover (tray click) or
+// pressing the 🔑 button — that interaction is the consent moment. A cooldown
+// keeps repeated opens from spamming the browser if the user keeps reopening
+// the popover while the login is unfinished.
+// Min gap between automatic login attempts. Intentionally LONGER than
+// LOGIN_WATCH_TIMEOUT_MS (5 min): if the user abandons a login, the watcher
+// dies first and the cooldown still holds the next popover-open back for a
+// while, instead of re-opening the browser the moment the watcher gives up.
+const AUTO_LOGIN_COOLDOWN_MS = 10 * 60_000;
+const CLAUDE_AUTH_ERROR_CODES = new Set(['claude_unauthorized', 'claude_credentials_missing']);
+
 let tray = null;
 let popoverWindow = null;
 // Current popover content height (CSS px). Starts at the first-paint default
@@ -64,6 +81,10 @@ let fadeTimer = null;
 let ntfyResetNotifier = null;
 // target -> { timer, deadline } while we wait for an interactive login to land.
 const loginWatchers = { claude: null, codex: null };
+// Set true by the polling loop when it sees a persistent Claude auth error;
+// consumed (and the browser login started) only when the user opens the popover.
+let claudeReauthPending = false;
+let lastAutoLoginAt = 0;
 let latestSnapshot = {
   claude: null, // {ok, data?, error?}
   codex: null,
@@ -227,6 +248,10 @@ function applyContentHeight(rawHeight) {
 function showPopover() {
   const win = createPopoverWindow();
   if (win.isVisible()) {
+    // User looking at the app is the consent moment for the deferred browser
+    // login; start it before the snapshot send so the renderer immediately
+    // shows the in-progress state.
+    maybeStartPendingReauth();
     sendSnapshotToRenderer();
     return;
   }
@@ -236,6 +261,7 @@ function showPopover() {
   win.show();
   win.focus();
   fadeWindowTo(win, 1);
+  maybeStartPendingReauth();
   sendSnapshotToRenderer();
 }
 
@@ -416,6 +442,55 @@ function openLoginTerminal(target) {
   }
 }
 
+// Like openLoginTerminal but with no visible console window. This is the
+// background re-auth path: it still opens the browser (the OAuth flow), but it
+// must only ever be invoked when the user has just opened the popover (see the
+// design note near AUTO_LOGIN_COOLDOWN_MS) — never from the polling loop.
+function openLoginSilent(target) {
+  const exe = target === 'claude' ? resolveClaudeExecutable() : resolveCodexExecutable();
+  if (!exe) {
+    logger.warn('[login] silent login executable missing', target);
+    return false;
+  }
+  const cliArgs = loginArgsFor(target);
+  try {
+    if (process.platform === 'win32') {
+      // Spawn powershell.exe directly (no `cmd /c start`), hidden. `invoke` is
+      // just the `& 'exe' 'arg'...` call-operator string with the same
+      // single-quote escaping as the visible login path.
+      const invoke = buildSilentPsCommand(exe, cliArgs);
+      spawn(
+        'powershell.exe',
+        [
+          '-NoProfile', '-ExecutionPolicy', 'Bypass',
+          '-WindowStyle', 'Hidden',
+          '-Command', invoke,
+        ],
+        { detached: true, stdio: 'ignore', windowsHide: true },
+      ).unref();
+    } else {
+      spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
+    }
+    watchForLoginCompletion(target);
+    logger.info('[login] silent login started', target);
+    return true;
+  } catch (err) {
+    logger.error('[login] failed to spawn silent login', err);
+    return false;
+  }
+}
+
+// Start the deferred Claude re-auth, but only when one is actually pending, no
+// login is already in flight, and we are past the cooldown. Called when the
+// user opens the popover — the consent moment for opening the browser.
+function maybeStartPendingReauth() {
+  if (!claudeReauthPending) return;
+  if (loginWatchers.claude) return;
+  if (Date.now() - lastAutoLoginAt <= AUTO_LOGIN_COOLDOWN_MS) return;
+  lastAutoLoginAt = Date.now();
+  openLoginSilent('claude');
+}
+
 async function fileSignature(filePath) {
   try {
     const st = await fsp.stat(filePath);
@@ -482,6 +557,7 @@ function buildSnapshotForRenderer() {
     isPolling,
     theme: currentTheme(),
     appVersion: app.getVersion(),
+    loginInProgress: { claude: !!loginWatchers.claude, codex: !!loginWatchers.codex },
   };
 }
 
@@ -506,6 +582,10 @@ async function refreshNow() {
     codex: settled(codexRes),
     fetchedAt: Date.now(),
   };
+  // Record (don't act on) a persistent Claude auth error. The browser-opening
+  // login is deferred to maybeStartPendingReauth() when the user opens the
+  // popover. A successful poll clears this by setting it false.
+  claudeReauthPending = CLAUDE_AUTH_ERROR_CODES.has(latestSnapshot.claude?.error?.code);
   isPolling = false;
   updateNtfyNotifications();
   updateTray();
