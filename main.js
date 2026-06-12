@@ -10,6 +10,7 @@ const settingsStore = require('./src/settings');
 const autoLaunch = require('./src/autoLaunch');
 const claudeProvider = require('./src/claudeProvider');
 const codexProvider = require('./src/codexProvider');
+const { NtfyResetNotifier } = require('./src/ntfyNotifier');
 const { buildTrayImage } = require('./src/trayIcon');
 const { resolveClaudeExecutable, resolveCodexExecutable } = require('./src/cliPaths');
 const { buildLoginPsCommand } = require('./src/loginCommand');
@@ -60,6 +61,7 @@ let popoverHeight = POPOVER_DEFAULT_HEIGHT;
 let pollTimer = null;
 let isPolling = false;
 let fadeTimer = null;
+let ntfyResetNotifier = null;
 // target -> { timer, deadline } while we wait for an interactive login to land.
 const loginWatchers = { claude: null, codex: null };
 let latestSnapshot = {
@@ -82,6 +84,24 @@ function getSettings() {
 
 function saveSettings(partial) {
   return settingsStore.save(partial);
+}
+
+function updateNtfyNotifications() {
+  if (ntfyResetNotifier) {
+    ntfyResetNotifier.update(latestSnapshot);
+  }
+}
+
+function ntfyPatchFromRenderer(value) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const patch = {};
+  for (const key of ['topicUrl', 'accessToken']) {
+    if (Object.hasOwn(raw, key)) patch[key] = typeof raw[key] === 'string' ? raw[key] : '';
+  }
+  for (const key of ['notifyFiveHour', 'notifyWeekly']) {
+    if (Object.hasOwn(raw, key)) patch[key] = !!raw[key];
+  }
+  return patch;
 }
 
 function createPopoverWindow() {
@@ -342,6 +362,7 @@ function rebuildTrayMenu() {
 function setPollingInterval(seconds) {
   saveSettings({ pollingIntervalSec: seconds });
   restartPolling();
+  updateNtfyNotifications();
   sendSnapshotToRenderer();
 }
 
@@ -486,6 +507,7 @@ async function refreshNow() {
     fetchedAt: Date.now(),
   };
   isPolling = false;
+  updateNtfyNotifications();
   updateTray();
   sendSnapshotToRenderer();
 }
@@ -519,6 +541,7 @@ function restartPolling() {
 
 function quitApp() {
   if (pollTimer) clearInterval(pollTimer);
+  if (ntfyResetNotifier) ntfyResetNotifier.dispose();
   stopLoginWatcher('claude');
   stopLoginWatcher('codex');
   try { codexProvider.shutdown(); } catch { /* ignore */ }
@@ -547,6 +570,11 @@ ipcMain.handle('set-auto-launch', (_evt, enabled) => {
   rebuildTrayMenu();
   return buildSnapshotForRenderer();
 });
+ipcMain.handle('set-ntfy-settings', (_evt, partial) => {
+  saveSettings({ ntfy: ntfyPatchFromRenderer(partial) });
+  updateNtfyNotifications();
+  return buildSnapshotForRenderer();
+});
 ipcMain.handle('open-login', (_evt, target) => {
   return openLoginTerminal(target === 'codex' ? 'codex' : 'claude');
 });
@@ -565,6 +593,7 @@ app.on('window-all-closed', (e) => {
 app.whenReady().then(async () => {
   logger.init(app.getPath('logs'));
   logger.info(`[app] ready v${app.getVersion()}`);
+  ntfyResetNotifier = new NtfyResetNotifier({ getSettings, logger });
 
   // Hide from taskbar
   if (process.platform === 'win32') {
@@ -596,5 +625,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  if (ntfyResetNotifier) ntfyResetNotifier.dispose();
   try { codexProvider.shutdown(); } catch { /* ignore */ }
 });
