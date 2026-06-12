@@ -110,4 +110,6 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 - `npm run review:codex*` は codex がネットワークを使うため、サンドボックスを無効にして実行する。
 - 詳しい手順は [docs/cross-review.md](docs/cross-review.md) を参照。
 
-**取り込み（vendored）**: `tools/cross-review.js` / `docs/cross-review.md` / `.cross-review.example.md` は ai-cross-review からのコピーなので直接編集しない（更新は上書きコピー）。このリポで編集するのは `.cross-review.md`（観点）だけ。
+**トークン節約と差分制御（upstream PR #10–15）**: 既定のレビュー対象は **`origin/main` 優先解決のコミット済み差分**（解決できなければローカル `main`）。差分サイズは常に stderr 表示し、閾値超過（既定 256KB・`--max-diff-kb` / `CROSS_REVIEW_MAX_DIFF_KB`、`0` で無効）ならレビュアーを起動せず中断する。ロックファイル・生成物（`package-lock.json` / `*.min.js` / `*.map` 等）は**既定で差分から除外**（`.cross-review-ignore` で追加・`CROSS_REVIEW_IGNORE` でパス指定・`--no-exclude` で無効化）。巨大ファイル差分は **stat 要約に置換**（`--max-file-diff-kb`、既定 64KB・`0` で無効）。未コミットの実装を見るなら `-- --uncommitted`。
+
+**取り込み（vendored）**: `tools/cross-review.js` / `tools/cross-review.sync.js` / `docs/cross-review.md` / `.cross-review.example.md` は ai-cross-review からのコピーなので直接編集しない。**更新は `npm run sync`**（= `node tools/cross-review.sync.js`。マニフェスト `tools/cross-review.sync.json` に従い upstream main から機械同期。`npm run sync:check` でドリフト検査）。このリポで編集するのは `.cross-review.md`（観点）だけ。

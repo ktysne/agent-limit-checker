@@ -1,0 +1,14 @@
+{
+  "upstream": {
+    "repo": "https://github.com/ktysne/ai-cross-review.git",
+    "ref": "main"
+  },
+  "lastSyncedCommit": "596323d1573e3cfa0c7df72dcaa8f42d9222612b",
+  "lastSyncedRef": "main",
+  "files": [
+    { "from": "tools/cross-review.js", "to": "tools/cross-review.js" },
+    { "from": "tools/cross-review.sync.js", "to": "tools/cross-review.sync.js" },
+    { "from": "docs/cross-review.md", "to": "docs/cross-review.md" },
+    { "from": ".cross-review.example.md", "to": ".cross-review.example.md" }
+  ]
+}
