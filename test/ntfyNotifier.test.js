@@ -67,7 +67,7 @@ test('buildResetMessage includes the service, reset window, and ntfy metadata', 
     resetsAt,
   });
 
-  assert.equal(message.title, 'Agent Limit Checker: 5時間リセット');
+  assert.equal(message.title, 'Agent Limit Checker');
   assert.match(message.message, /Codex の5時間リセット時刻です。/);
   assert.equal(message.priority, 'default');
   assert.equal(message.tags, 'hourglass');
@@ -168,7 +168,7 @@ test('NtfyResetNotifier sends one notification per reset timestamp', async () =>
   await Promise.resolve();
 
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].title, 'Agent Limit Checker: 5時間リセット');
+  assert.equal(sent[0].title, 'Agent Limit Checker');
 
   notifier.update(snapshot);
   assert.equal(timers.length, 1);

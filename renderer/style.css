@@ -92,6 +92,11 @@ html, body {
   background: var(--button-hover);
 }
 
+.icon-btn[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--button-hover);
+}
+
 .text-btn {
   background: transparent;
   border: none;
@@ -270,6 +275,19 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .setting-row {
