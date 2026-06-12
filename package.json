@@ -1,6 +1,6 @@
 {
   "name": "agent-limit-checker",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "description": "Windows tray app that shows Claude Code and Codex API rate-limit usage (Windows port of otoha1119/token-checker)",
   "main": "main.js",
   "author": "agent-limit-checker contributors",
