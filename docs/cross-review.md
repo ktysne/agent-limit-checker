@@ -260,13 +260,150 @@ node tools/cross-review.js subagent      # CLI を起動せずレビュー用プ
 - **専用サブコマンド `codex exec review` は使いません**。  
   codex v0.137.0 で `--uncommitted` / `--base` が `[PROMPT]` と併用できなくなり、観点チェックリストを同時に渡せなくなったため、汎用の `exec` と差分の埋め込みに統一しました。  
 - 差分の対象範囲:
-  - 既定: `git diff <base>...HEAD`（ブランチ vs base、既定の base は `main`）
+  - 既定: `git diff <base>...HEAD`（ブランチ vs base）。**既定の base は `origin/main` を優先解決**します（後述「既定 base の解決と差分サイズのガード」）。
   - `--uncommitted`: tracked（`git diff HEAD`）＋ untracked
     （`git ls-files --others --exclude-standard -z` の各ファイルを `git diff --no-index` で新規ファイル差分にする。`-z`（NUL 区切り）で空白入りパスでも壊れない）
 - 申し送り（`--instructions <path>`）: レビュアー個別の重点指摘を**観点とは別系統**で足します（`REVIEWER_NOTES_HEADER` の見出し付きでプロンプトに追加。`.cross-review.md` は置き換えない）。  
   `--uncommitted` の未追跡収集からは、申し送りファイル自体を**絶対パスの突き合わせで除外**します。  
+- 差分の間引き: ロックファイル・生成物（`package-lock.json` / `*.min.js` / `*.map` ほか）を**既定で除外**し、巨大なファイル差分は **stat 要約に置換**してトークンを節約します（`.cross-review-ignore` で除外を追加、`--no-exclude` で無効化、`--max-file-diff-kb` で置換しきい値。詳細は後述「差分の除外と要約」）。  
 - 引数解析・差分生成・プロンプト生成・観点解決・申し送り注入は `tests/cross-review.test.js`（vitest）が担保します。  
   このテストは**取り込み先では任意**で、vitest を使うときだけ同梱します（同梱しなくても engine の振る舞いは upstream のテストが担保）。
+
+## 既定 base の解決と差分サイズのガード
+
+レビュー差分のトークン消費を抑えるための仕組みです。
+
+### 既定 base は `origin/main` を優先解決する
+
+既定（`--base` 未指定・コミット済み差分モード）では、base を次の順で解決します。
+
+1. `git fetch origin main --quiet` を**ベストエフォート**で実行（10 秒タイムアウト）。  
+   リモートが無い・オフライン・タイムアウトのときは stderr に警告 1 行を出して続行します（失敗で止めません）。  
+   タイムアウト等で fetch が中断された場合は、**前回取得済みの `origin/main`**（やや古い可能性あり）が使われることがあります（次回の fetch で追いつくため実害は軽微）。
+2. `git rev-parse --verify origin/main` が通れば **`origin/main` を base に採用**します（stderr に 1 行通知。`--base` で変更可）。
+3. 解決できなければ従来どおりローカル `main` を使います。
+
+`--base` を明示したとき、および `--uncommitted` のときは、この解決を**スキップ**します（fetch もしません）。指定した base / 未コミット差分には介入しません。
+
+**stale なローカル `main` の落とし穴**: ローカル `main` が古いと merge-base が過去にずれ、HEAD が既に取り込んだ `main` 側のコミットまで `git diff main...HEAD` に混入します（実例: 89 コミット・792KB に肥大。`git fetch origin main` + `--base origin/main` で 65KB に正常化）。`origin/main` の優先解決はこれを自動で避けるための既定挙動です。手動なら `git fetch origin main` 後に `--base origin/main` を明示しても同じ効果になります。
+
+### 差分サイズの表示とガード
+
+- レビュー差分の収集後、サイズを**常に stderr に 1 行表示**します（例: `[cross-review] レビュー差分サイズ: 65.2KB`）。
+- サイズが閾値（KB）を超えると、**レビュアーを起動せず中断**します（`subagent` でもプロンプトを出しません。`process.exitCode = 1`）。  
+  エラーメッセージに、原因の候補（stale な `main`・生成物 / lock ファイルの混入）と回避策を出します。
+- 閾値の解決順は **`--max-diff-kb <n>`（CLI フラグ）→ 環境変数 `CROSS_REVIEW_MAX_DIFF_KB` → 既定 256KB** です。  
+  値 `0` で**ガードを無効化**します（意図的に大きい差分をレビューしたいとき）。
+
+```bash
+node tools/cross-review.js codex --max-diff-kb 512   # 上限を 512KB に引き上げる
+node tools/cross-review.js codex --max-diff-kb 0     # ガードを無効化
+CROSS_REVIEW_MAX_DIFF_KB=512 npm run review:codex    # 環境変数で指定
+```
+
+### 差分の除外と要約（レビュー価値の低い差分でトークンを浪費しない）
+
+レビュー価値が低い差分（ロックファイル・生成物）や、巨大すぎて読まないファイル差分を、レビュアーへ渡す前に間引きます。
+
+**既定除外（ロックファイル・生成物）**: 次のファイルは、差分本文から既定で除外します（ファイル名のみのパターンで、どの階層でも一致します）。
+
+```
+package-lock.json / npm-shrinkwrap.json / yarn.lock / pnpm-lock.yaml /
+bun.lock / bun.lockb / Cargo.lock / Gemfile.lock / poetry.lock / uv.lock /
+composer.lock / go.sum / *.min.js / *.min.css / *.map
+```
+
+除外は `git diff` のパススペック（`:(exclude,glob,top)**/<pattern>`、include 側は repo ルート `:/`）で適用するので、サブディレクトリの同名ファイルにも効き、cwd がリポ直下でなくても差分スコープは変わりません。  
+**除外したが変更のあったファイルは、ファイル名だけプロンプトに残します**（`【レビュー対象外（除外済み）の変更ファイル】` の枠）。レビュアーが必要と判断すれば個別に読めます（差分本文は載りません）。
+
+**追加の除外（`.cross-review-ignore`）**: 既定除外に足したいパターンは `.cross-review-ignore` に書きます。  
+形式は **1 行 1 パターン・`#` 始まりはコメント・空行は無視**。観点（`.cross-review.md`）と同じ流儀で、`環境変数 CROSS_REVIEW_IGNORE（パス）→ <cwd>/.cross-review-ignore → <スクリプト>/../.cross-review-ignore` の順に探し、見つかった最初の 1 つを読みます（既定パターンと併合）。  
+`CROSS_REVIEW_IGNORE` を指定したのに読めないときは、黙って次へ進まず警告を出します。
+
+```text
+# .cross-review-ignore の例（既定パターンに追加される）
+docs/generated/*.md
+*.snap
+schema.sql
+```
+
+**すべての除外を無効化（`--no-exclude`）**: 既定除外も含めてすべての除外を切ります（緊急時の逃げ道。生成物もまとめてレビューしたいとき）。
+
+**巨大ファイル差分の stat 置換（`--max-file-diff-kb`）**: ファイル単位の差分がしきい値（KB）を超えたら、本文を **1 行の stat 要約**（`diff --git` 行＋「<X.X>KB・追加 n 行 / 削除 m 行のため本文を省略」）に置き換えます。  
+置換は全体サイズガードの**前**に行うので、置換で縮んだ分は全体ガードに掛かりません（巨大 1 ファイルが置換で縮めばガードを通ります）。置換が起きたら stderr に 1 行通知します。  
+しきい値の解決順は **`--max-file-diff-kb <n>`（CLI フラグ）→ 環境変数 `CROSS_REVIEW_MAX_FILE_DIFF_KB` → 既定 64KB**。値 `0` で置換を無効化します。
+
+```bash
+node tools/cross-review.js codex --max-file-diff-kb 128  # ファイル単位の置換しきい値を 128KB に
+node tools/cross-review.js codex --max-file-diff-kb 0    # stat 置換を無効化
+node tools/cross-review.js codex --no-exclude            # 既定除外も含めすべての除外を無効化
+```
+
+### 妥当性確認を軽くする（往復のトークンを線形に増やさない）
+
+指摘対応後の妥当性確認で、毎回**全差分**を再送するとトークンが往復ごとに膨らみます。  
+レビュー時点の HEAD を控えておき、**前回レビュー以降の増分差分だけ**を送ると線形増加を避けられます。
+
+1. レビュー前に SHA を控える: `git rev-parse HEAD`。
+2. 指摘対応後の妥当性確認は、その SHA を base にして増分だけ送る:
+
+   ```bash
+   node tools/cross-review.js <reviewer> --base <そのSHA> --instructions <指摘ファイル>
+   ```
+
+   `--base` はブランチ名に限らず**任意のコミット**を受けます。これで「前回レビュー以降の増分差分 ＋ 前回指摘」だけがレビュアーへ渡り、毎回の全差分再送を避けられます（往復のトークンが線形に増えない）。
+
+## 同期スクリプト（tools/cross-review.sync.js）
+
+「そのままコピーするファイル」（CLI 本体・この手順書・観点テンプレート・テスト等）を、上流リポジトリから取り込み先プロジェクトへ取り込むスクリプトです。  
+手で 1 ファイルずつ上書きコピーする代わりに、マニフェストに従って機械的に同期します（手動コピー運用の置き換え）。  
+依存の追加はありません（Node 標準 API のみ・CommonJS）。git だけで取り込み元を取得します。
+
+- **取り込み元の取得**: `upstream.repo` の `upstream.ref`（ブランチ / タグ / コミット）を一時ディレクトリへ **shallow fetch**（`git init` → `git fetch --depth 1 origin <ref>` → `checkout FETCH_HEAD`）し、そこからファイルをコピーします。SHA 直接指定も拾えるよう `clone --branch` ではなく `fetch <ref>` を使います。一時ディレクトリは実行後に削除します。
+- **取り込むファイルの対応付け**: `files[]` の `from`（上流相対）→ `to`（取り込み先相対）で対応付けます。取り込み先の配置が上流と違っても対応できます（例: テストを `tests/tools/` 配下に置く）。**ファイル単位のみ**で、`from` にディレクトリを指定した一括コピーは非対応です。
+- **require パス等の機械置換**: `files[].replace`（`{ from, to }` の配列）で**文字列リテラルの全置換**を行います（正規表現ではない）。コピーしたテストの require パスを取り込み先の配置へ合わせる用途です。上流側は書き換えません。
+- **取り込み元の記録**: 取り込んだ実コミットを `lastSyncedCommit`（と `lastSyncedRef`）へ書き戻します（記録値が変わるときだけ。同一コミットの再同期では書き換えません）。どの版から取り込んだかが履歴に残り、検査の基準にもなります。
+- **モード**:
+  - 既定（同期）: 差分のあるファイルだけ上書きし、取り込み元コミットが変わったときだけマニフェストの `lastSyncedCommit` を更新する。
+  - `--check`: 書き込まず、上流（ref）との差分（ドリフト）だけを報告する。差分があれば **exit 1**（CI のドリフト検知向け）。
+  - `--dry-run`: 書き込まず、同期で何が変わるかだけ表示する。
+- **そのほかのオプション**: `--ref <ref>`（マニフェストの ref を上書き）/ `--manifest <path>`（マニフェストの場所。既定はスクリプト隣の `cross-review.sync.json`）/ `--root <path>`（取り込み先ルート。既定は `tools/` の 1 つ上 = プロジェクトルート。cwd に依存せず解決）。
+- **安全策**: `from` / `to` が取り込み元 / 取り込み先ルートの外を指す場合はエラーにします（マニフェスト由来のパスでルート外へ読み書きする事故を防ぐ）。
+
+マニフェスト（`tools/cross-review.sync.json`）の形:
+
+```json
+{
+  "upstream": { "repo": "https://github.com/ktysne/ai-cross-review.git", "ref": "main" },
+  "lastSyncedCommit": null,
+  "files": [
+    { "from": "tools/cross-review.js", "to": "tools/cross-review.js" },
+    { "from": "tools/cross-review.sync.js", "to": "tools/cross-review.sync.js" },
+    { "from": "docs/cross-review.md", "to": "docs/cross-review.md" },
+    { "from": ".cross-review.example.md", "to": ".cross-review.example.md" },
+    {
+      "from": "tests/cross-review.test.js",
+      "to": "tests/tools/cross-review.test.js",
+      "replace": [{ "from": "../tools/cross-review.js", "to": "../../tools/cross-review.js" }]
+    }
+  ]
+}
+```
+
+上の `files` は代表例です。配布物一式の雛形は `tools/cross-review.sync.example.json` にあり、こちらが正本です。  
+このマニフェスト自体は**取り込み先で編集するファイル**です（上書きコピーの対象に含めない）。  
+`.cross-review.md`（観点）や `CLAUDE.md` / `AGENTS.md` などプロジェクト固有のファイルは `files` に入れません（上書きで消えます）。
+
+```bash
+node tools/cross-review.sync.js            # 上流から取り込む（差分のあるファイルだけ上書き）
+node tools/cross-review.sync.js --check    # ドリフト検査のみ（書き込まない。差分があれば exit 1）
+node tools/cross-review.sync.js --dry-run  # 何が変わるかだけ表示（書き込まない）
+node tools/cross-review.sync.js --ref v1.2.3   # 取り込む版をマニフェストより優先
+```
+
+> 取り込み元の取得は git のネットワークアクセスを使います。  
+> サンドボックス内では fetch に失敗することがあるため、必要に応じてネットワークを許可して実行してください。  
+> 引数解析・マニフェスト検証・置換・同期プラン算出・同期/検査の配線は `tests/cross-review.sync.test.js`（vitest）が担保します（取り込み先では任意。vitest を使うときだけ同梱）。
 
 ## 観点チェックリスト（.cross-review.md）
 
@@ -289,5 +426,6 @@ node tools/cross-review.js subagent      # CLI を起動せずレビュー用プ
 
 - レビュー観点を増やしたり減らしたりしたら `.cross-review.md` を更新します。  
 - CLI の対象範囲（`--staged` など）を増やすときは、（テストを同梱しているなら）`tests/cross-review.test.js` も更新します。  
+- 同期スクリプトの仕様（マニフェストの形・モード）を変えたら、（同梱しているなら）`tests/cross-review.sync.test.js` も更新します。  
 - 運用ルールの要約はコピー先の `CLAUDE.md` / `AGENTS.md`（あれば）に置きます。  
   このドキュメントが正本なので、内容を二重に書きません（要約からはここへリンクします）。
