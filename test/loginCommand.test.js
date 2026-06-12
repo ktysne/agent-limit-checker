@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildLoginPsCommand } = require('../src/loginCommand');
+const { buildLoginPsCommand, buildSilentPsCommand } = require('../src/loginCommand');
 
 test('buildLoginPsCommand stays a single line so it survives the cmd /c start re-parse', () => {
   const cmd = buildLoginPsCommand('C:/Users/me/AppData/Roaming/npm/claude.ps1', ['auth', 'login']);
@@ -36,4 +36,23 @@ test('buildLoginPsCommand auto-closes on success and waits (Read-Host) on failur
   assert.ok(cmd.includes('Read-Host'));
   // No `;` between `}` and `else` — PowerShell rejects that.
   assert.ok(!/}\s*;\s*else/.test(cmd));
+});
+
+test('buildSilentPsCommand returns only the call-operator invocation (no window handling)', () => {
+  const cmd = buildSilentPsCommand('claude', ['auth', 'login']);
+  assert.equal(cmd, "& 'claude' 'auth' 'login'");
+  // No success/failure window handling — it is purely the invocation.
+  assert.ok(!cmd.includes('Read-Host'));
+  assert.ok(!cmd.includes('LASTEXITCODE'));
+});
+
+test('buildSilentPsCommand single-quotes a path with spaces and never emits a double quote', () => {
+  const cmd = buildSilentPsCommand('C:/path with spaces/claude.exe', ['auth', 'login']);
+  assert.ok(!cmd.includes('"'), 'command must contain no double quotes');
+  assert.equal(cmd, "& 'C:/path with spaces/claude.exe' 'auth' 'login'");
+});
+
+test('buildSilentPsCommand escapes single quotes inside the path by doubling them', () => {
+  const cmd = buildSilentPsCommand("C:/o'brien/codex.exe", ['login']);
+  assert.equal(cmd, "& 'C:/o''brien/codex.exe' 'login'");
 });

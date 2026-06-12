@@ -35,4 +35,17 @@ function buildLoginPsCommand(exe, cliArgs) {
   );
 }
 
-module.exports = { buildLoginPsCommand };
+// Build only the `& 'exe' 'arg'...` call-operator invocation, with the same
+// single-quote escaping as buildLoginPsCommand. Used for the silent (hidden
+// window) background login path, which has no success/failure window handling —
+// it just fires the OAuth flow and lets watchForLoginCompletion pick it up.
+// Note: this path spawns powershell.exe directly with an argv array, so the
+// "no double quotes" constraint of the `cmd /c start` re-parse does not apply
+// here — the single-quote style is kept purely for consistency with the
+// visible login path.
+function buildSilentPsCommand(exe, cliArgs) {
+  const sq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  return ['&', sq(exe), ...cliArgs.map(sq)].join(' ');
+}
+
+module.exports = { buildLoginPsCommand, buildSilentPsCommand };
