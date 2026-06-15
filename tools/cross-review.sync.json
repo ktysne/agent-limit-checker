@@ -3,12 +3,28 @@
     "repo": "https://github.com/ktysne/ai-cross-review.git",
     "ref": "main"
   },
-  "lastSyncedCommit": "596323d1573e3cfa0c7df72dcaa8f42d9222612b",
+  "lastSyncedCommit": "7e4d80a7e85ed51d7f4a31c5f1bb40fdf095f52c",
   "lastSyncedRef": "main",
   "files": [
-    { "from": "tools/cross-review.js", "to": "tools/cross-review.js" },
-    { "from": "tools/cross-review.sync.js", "to": "tools/cross-review.sync.js" },
-    { "from": "docs/cross-review.md", "to": "docs/cross-review.md" },
-    { "from": ".cross-review.example.md", "to": ".cross-review.example.md" }
+    {
+      "from": "tools/cross-review.js",
+      "to": "tools/cross-review.js"
+    },
+    {
+      "from": "tools/cross-review.sync.js",
+      "to": "tools/cross-review.sync.js"
+    },
+    {
+      "from": "docs/cross-review.md",
+      "to": "docs/cross-review.md"
+    },
+    {
+      "from": ".cross-review.example.md",
+      "to": ".cross-review.example.md"
+    },
+    {
+      "from": ".claude/skills/cross-review/SKILL.md",
+      "to": ".claude/skills/cross-review/SKILL.md"
+    }
   ]
 }
