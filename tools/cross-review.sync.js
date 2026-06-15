@@ -23,7 +23,7 @@
 //   取り込み先のディレクトリ構成が上流と違っても from / to で対応付ける。テストの require パス等は
 //   replace で機械置換する (上流側を書き換えない)。
 // - --check は書き込まず、上流 (ref) と取り込み先の差分 (ドリフト) だけを報告する。
-//   差分があれば exit 1 にして CI で検知できるようにする (session-score-player の docs:check 相当)。
+//   差分があれば exit 1 にして CI で検知できるようにする (取り込み先の docs:check 相当のドリフト検知)。
 // - 副作用 (git 実行・一時ディレクトリ・ファイル I/O) は deps で差し替え可能にし、純粋なロジック
 //   (引数解析・マニフェスト検証・置換・同期プラン算出) を単体テストで固定する。cross-review.js と同様。
 
@@ -137,6 +137,17 @@ function loadManifest(manifestPath, deps = {}) {
 function validateManifest(manifest, refOverride) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('マニフェストはオブジェクトである必要があります');
+  }
+  // 旧形式 ({source, ref, commit}) の検出: upstream / files を持たず source / commit があるなら、
+  // 取り込み先が独自 sync 機構のレガシーマニフェストを同名で置いている可能性が高い。汎用の
+  // 「upstream がありません」より具体的に、新形式への移行手順を促す (移行初回の取り込みを滑らかに)。
+  if (manifest.upstream === undefined && manifest.files === undefined
+      && (manifest.source !== undefined || manifest.commit !== undefined)) {
+    throw new Error(
+      'マニフェストが旧形式 ({source, ref, commit}) のようです。'
+      + ' 新形式 ({upstream:{repo,ref}, files:[...]}) へ移行してください'
+      + ' (雛形は cross-review.sync.example.json)。',
+    );
   }
   const up = manifest.upstream;
   if (!up || typeof up !== 'object') {

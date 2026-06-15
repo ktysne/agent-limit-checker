@@ -22,6 +22,8 @@ Claude と Codex を交互に使う相互レビューの運用ドキュメント
 CLI 経由（`npm run review:*`）で回すには `codex` / `claude` が PATH にあること。  
 拡張 / アプリ内で完結するなら不要です。
 
+> **課金メモ（Claude サブスクプラン）**: Anthropic のサブスク（Pro / Max / Team / Enterprise）では、**2026-06-15 以降** `claude -p`（`npm run review:claude` が内部で使うヘッドレス実行）や Agent SDK 経由の利用が、インタラクティブの利用上限とは**別の月次 Agent SDK クレジット枠**から消費されます。`npm run review:codex*`（OpenAI の Codex CLI）や `subagent`（外部 API を呼ばずプロンプトを出力するだけ）は対象外です。挙動・認証方法に変更はなく、影響は課金・利用枠のみ。CI / 非対話で使う場合の長寿命トークンは `claude setup-token`（→ `CLAUDE_CODE_OAUTH_TOKEN`）。詳細は [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) を参照。
+
 ## 基本フロー（4 ステップのループ）
 
 実装担当とレビュー担当を入れ替えながら、次の 4 ステップで回します。
@@ -379,8 +381,10 @@ node tools/cross-review.js codex --no-exclude            # 既定除外も含め
   "files": [
     { "from": "tools/cross-review.js", "to": "tools/cross-review.js" },
     { "from": "tools/cross-review.sync.js", "to": "tools/cross-review.sync.js" },
+    { "from": "tools/cross-review.sync-all.js", "to": "tools/cross-review.sync-all.js" },
     { "from": "docs/cross-review.md", "to": "docs/cross-review.md" },
     { "from": ".cross-review.example.md", "to": ".cross-review.example.md" },
+    { "from": ".claude/skills/cross-review/SKILL.md", "to": ".claude/skills/cross-review/SKILL.md" },
     {
       "from": "tests/cross-review.test.js",
       "to": "tests/tools/cross-review.test.js",
@@ -390,9 +394,36 @@ node tools/cross-review.js codex --no-exclude            # 既定除外も含め
 }
 ```
 
-上の `files` は代表例です。配布物一式の雛形は `tools/cross-review.sync.example.json` にあり、こちらが正本です。  
+上の `files` は代表例です。配布物一式の雛形は `tools/cross-review.sync.example.json` にあり、こちらが正本です（CLI 本体・同期スクリプト・一括同期ツール `cross-review.sync-all.js`・手順書・観点テンプレート・**Claude Code スキル `.claude/skills/cross-review/SKILL.md`**・各テストを含む）。  
 このマニフェスト自体は**取り込み先で編集するファイル**です（上書きコピーの対象に含めない）。  
 `.cross-review.md`（観点）や `CLAUDE.md` / `AGENTS.md` などプロジェクト固有のファイルは `files` に入れません（上書きで消えます）。
+
+`.claude/skills/cross-review/SKILL.md`（相互レビューの実行手順スキル）も vendored（上書き更新の対象）です。  
+スキルにはプロジェクト固有の運用（検証コマンド・CI・同期スクリプト名など）を書かず、それらは `.cross-review.md` や各リポの doc 側へ分離します。こうすると、上流のスキル更新が取り込み先のカスタマイズと干渉しません。
+
+doc を HTML へ生成する（docs パイプラインを持つ）プロジェクトや、相互レビューの「入口 doc」を別に置きたいプロジェクトでは、`docs/cross-review.md` を `to` で自分のパスへ map し（例: `documents/developer/md/cross-review-flow.md`。これも vendored）、プロジェクト固有の運用は別の **overlay doc**（取り込み先が所有・編集）＋ `.cross-review.md` に分けます。overlay から vendored フロー doc へリンクすれば、汎用フローの再同期と固有運用の編集が干渉しません。同期はファイル内容を上書きするだけなので、`docs:build` 等の**生成は取り込み先の責務**です（再同期後に各自で実行）。
+
+## 複数プロジェクトへ一括反映（tools/cross-review.sync-all.js）
+
+導入プロジェクトが増えると、上流を更新するたびに 1 リポずつ同期するのは手間です。  
+`tools/cross-review.sync-all.js` は、ローカルの作業ルート（例: `/Develop`）配下を走査し、**同期マニフェスト `cross-review.sync.json` を持つディレクトリ＝導入プロジェクト**を自動判定して、まとめて同期します。
+
+- **判定**: `cross-review.sync.json` の存在を単一マーカーにします（同期に必須のファイルなので誤検出しにくい）。慣例どおり `tools/cross-review.sync.json` に置かれている前提ですが、ルート直下に置かれていても拾います。
+- **同期ロジック**: 各プロジェクトに同梱された版ではなく、**この checkout の `cross-review.sync.js`（`runSync`）を再利用**して回します。導入先の sync スクリプトが古くても最新ロジックで一括反映できます。取り込むファイル・上流 ref は各プロジェクトのマニフェストを尊重します（`--ref` で一時上書き可）。
+- **独立実行**: 1 プロジェクトの失敗（マニフェスト不正・上流取得失敗など）で全体を止めません。各プロジェクトを独立に回し、最後に「更新 / 変更なし / ドリフト / エラー / 対象外」を集計します。終了コードは「いずれかが失敗」または「`--check` でいずれかにドリフト」のとき **1**（CI 向け）。
+- **対象外（skip）**: `cross-review.sync.json` という名前でも、**valid JSON だが** 内容が `upstream` / `files` を持たないもの（旧 `{source, ref, commit}` 形式の独自 sync 来歴や、別用途でたまたま同名のファイル）は **同期対象外（対象外）** として skip し、エラーにはしません。`/Develop` に新旧の流儀が混在していても全体を失敗させないためです。
+- **破損は skip せず error（exit 1）**: ファイルが **読めない（IO/権限エラー）/ JSON 構文エラー（破損）** の場合は、正式導入先の設定崩れなので対象外で握り潰さず **error** にし、終了コードを **1** にします（CI の `sync-all --check` で検出できるようにするため）。1 件の error でも他プロジェクトの同期は止めず、最後に集計します。
+- **走査**: `--depth <n>`（既定 4）で最大深さを調整。`node_modules` / `.git` / 隠しディレクトリはたどりません。
+
+```bash
+node tools/cross-review.sync-all.js --root /Develop --list    # 検出したプロジェクトを列挙するだけ
+node tools/cross-review.sync-all.js --root /Develop --check   # 各プロジェクトをドリフト検査 (書き込まない)
+node tools/cross-review.sync-all.js --root /Develop --dry-run # 各プロジェクトで何が変わるかだけ表示
+node tools/cross-review.sync-all.js --root /Develop           # 各プロジェクトを一括同期 (上書き更新)
+node tools/cross-review.sync-all.js --root /Develop --ref v1.2.3  # 取り込む ref を全プロジェクト共通で上書き
+```
+
+> 引数解析・プロジェクト走査・結果分類・集計・一括同期の配線は `tests/cross-review.sync-all.test.js`（vitest）が担保します（取り込み先では任意。一括同期ツールを入れ、かつ vitest を使うときだけ同梱）。
 
 ```bash
 node tools/cross-review.sync.js            # 上流から取り込む（差分のあるファイルだけ上書き）
