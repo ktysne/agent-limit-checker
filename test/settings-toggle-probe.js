@@ -28,7 +28,7 @@ const snapshot = {
     plan: 'Max 5x',
     fiveHour: { utilization: 0.83, resetsAt: now + 41 * 60 * 1000 },
     weekly: { utilization: 0.18, resetsAt: now + (16 * 3600 + 60) * 1000 },
-    weeklySonnet: { utilization: 0.0, resetsAt: null },
+    weeklyScoped: [{ label: 'Fable', utilization: 0.0, resetsAt: null }],
   } },
   codex: { ok: true, data: {
     plan: 'Plus',
