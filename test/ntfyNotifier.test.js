@@ -24,7 +24,7 @@ function sampleSnapshot(now) {
       data: {
         fiveHour: { utilization: 0.2, resetsAt: now + 60_000 },
         weekly: { utilization: 0.4, resetsAt: now + 7 * 86_400_000 },
-        weeklySonnet: { utilization: 0.1, resetsAt: now + 6 * 86_400_000 },
+        weeklyScoped: [{ id: null, label: 'Fable', utilization: 0.1, resetsAt: now + 6 * 86_400_000 }],
       },
     },
     codex: {
@@ -48,8 +48,32 @@ test('collectResetEvents respects five-hour and weekly opt-in settings', () => {
 
   assert.deepEqual(
     collectResetEvents(sampleSnapshot(now), settings).map((event) => event.key),
-    ['codex:weekly', 'claude:weeklySonnet', 'claude:weekly'],
+    ['codex:weekly', 'claude:weeklyScoped:Fable', 'claude:weekly'],
   );
+});
+
+test('collectResetEvents keys scoped weekly events off a stable scope id when present', () => {
+  const now = 1_800_000_000_000;
+  const snapshot = {
+    claude: {
+      ok: true,
+      data: {
+        weeklyScoped: [
+          { id: 'claude-fable-5', label: 'Fable', utilization: 0.3, resetsAt: now + 6 * 86_400_000 },
+          // No id and a shared label → the ordinal keeps the keys apart so
+          // neither reset notification is silently deduped away.
+          { id: null, label: 'スコープ', utilization: 0.1, resetsAt: now + 6 * 86_400_000 },
+          { id: null, label: 'スコープ', utilization: 0.2, resetsAt: now + 5 * 86_400_000 },
+        ],
+      },
+    },
+  };
+  const keys = collectResetEvents(snapshot, { ntfy: { notifyWeekly: true } }).map((e) => e.key);
+  assert.deepEqual(new Set(keys), new Set([
+    'claude:weeklyScoped:claude-fable-5', // stable id preferred
+    'claude:weeklyScoped:スコープ',        // first of a repeated label
+    'claude:weeklyScoped:スコープ#1',      // ordinal disambiguates the collision
+  ]));
 });
 
 test('normalizeTopicUrl accepts topic URLs and rejects missing topics', () => {

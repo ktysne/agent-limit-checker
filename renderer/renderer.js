@@ -100,7 +100,14 @@ function renderService(target, svc, loginInProgress) {
   }
   html += renderBucket('5時間', usage.fiveHour);
   if (usage.weekly) html += renderBucket('週次', usage.weekly, { compact: true });
-  if (usage.weeklySonnet) html += renderBucket('週次 (Sonnet)', usage.weeklySonnet, { compact: true });
+  // Per-model weekly caps (e.g. Fable) come through as an array; render one
+  // meter each, labelled by the model name the API reports. `label` is
+  // API-provided so it must be escaped before going into the bucket markup.
+  if (Array.isArray(usage.weeklyScoped)) {
+    for (const scoped of usage.weeklyScoped) {
+      html += renderBucket(`週次 (${escapeHtml(scoped.label)})`, scoped, { compact: true });
+    }
+  }
   body.innerHTML = html;
 }
 

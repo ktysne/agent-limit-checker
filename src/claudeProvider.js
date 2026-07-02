@@ -150,6 +150,50 @@ function parseBucket(bucket) {
   return { utilization, resetsAt };
 }
 
+// Per-model weekly caps (e.g. the Fable-5 "up to 50% of your weekly limit"
+// allowance) now arrive in the structured `limits` array, NOT the flat
+// `seven_day_sonnet` field — Anthropic returns the flat scoped buckets as
+// `null` once the scoped model changes. Each `weekly_scoped` entry carries its
+// own model `display_name` and `resets_at`, and its `percent` is normalized to
+// that scope's own cap (100% = that model is exhausted for the week), exactly
+// like the old per-model buckets. So Fable's 50%-of-weekly ceiling is baked
+// into the denominator — we surface `percent` as-is, the same way the Sonnet
+// meter did. Returns an array so multiple scoped models render side by side.
+// Falls back to the legacy `seven_day_sonnet` field for older API responses
+// that predate the `limits` array.
+function parseWeeklyScoped(json) {
+  const limits = json && Array.isArray(json.limits) ? json.limits : null;
+  if (limits) {
+    const scoped = [];
+    for (const entry of limits) {
+      if (!entry || entry.group !== 'weekly' || entry.kind !== 'weekly_scoped') continue;
+      const utilization = typeof entry.percent === 'number' ? entry.percent / 100 : null;
+      if (utilization == null) continue;
+      const model = entry.scope && entry.scope.model;
+      // `id` is the stable scope identifier (survives display renames);
+      // `display_name` is the human label and may be renamed or absent. Keep
+      // both — the notification dedupe key wants the stable id, the UI wants
+      // the label.
+      const id = model && typeof model.id === 'string' && model.id ? model.id : null;
+      const label = model && typeof model.display_name === 'string' && model.display_name
+        ? model.display_name
+        : 'スコープ';
+      let resetsAt = null;
+      if (entry.resets_at) {
+        const parsed = Date.parse(entry.resets_at);
+        if (!Number.isNaN(parsed)) resetsAt = parsed;
+      }
+      scoped.push({ id, label, utilization, resetsAt });
+    }
+    // `limits` present but no usable weekly_scoped entry (partial rollout, or a
+    // shape change that skipped them all) — fall through to the legacy flat
+    // field so an existing scoped cap doesn't silently disappear from the UI.
+    if (scoped.length) return scoped;
+  }
+  const legacy = parseBucket(json && json.seven_day_sonnet);
+  return legacy ? [{ id: null, label: 'Sonnet', ...legacy }] : [];
+}
+
 async function fetchUsage(accessToken) {
   const { json } = await httpGetJson(USAGE_URL, {
     Authorization: `Bearer ${accessToken}`,
@@ -161,7 +205,7 @@ async function fetchUsage(accessToken) {
   return {
     fiveHour: parseBucket(json.five_hour),
     weekly: parseBucket(json.seven_day),
-    weeklySonnet: parseBucket(json.seven_day_sonnet),
+    weeklyScoped: parseWeeklyScoped(json),
   };
 }
 
@@ -471,6 +515,7 @@ module.exports = {
     normalizeExpiresAt,
     shouldRefresh,
     parseBucket,
+    parseWeeklyScoped,
     extractPlanLabel,
     buildChildEnv,
   },

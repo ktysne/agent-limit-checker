@@ -60,6 +60,99 @@ test('parseBucket returns null when utilization is missing', () => {
   assert.equal(_private.parseBucket({}), null);
 });
 
+test('parseWeeklyScoped reads per-model weekly caps from the limits array', () => {
+  // Shape observed on /api/oauth/usage once Fable 5 became conditionally
+  // available: the flat `seven_day_sonnet` bucket is null and the scoped cap
+  // lives in `limits` as a weekly_scoped entry. `percent` is normalized to the
+  // scope's own cap (here Fable's 50%-of-weekly allowance), so 32 → 0.32.
+  const scoped = _private.parseWeeklyScoped({
+    seven_day_sonnet: null,
+    limits: [
+      { kind: 'session', group: 'session', percent: 49, resets_at: '2026-07-02T11:29:59+00:00' },
+      { kind: 'weekly_all', group: 'weekly', percent: 17, resets_at: '2026-07-08T10:00:00+00:00' },
+      {
+        kind: 'weekly_scoped',
+        group: 'weekly',
+        percent: 32,
+        resets_at: '2026-07-08T09:59:59+00:00',
+        scope: { model: { id: null, display_name: 'Fable' } },
+      },
+    ],
+  });
+  assert.deepEqual(scoped, [
+    {
+      id: null, // Fable currently reports scope.model.id as null
+      label: 'Fable',
+      utilization: 0.32,
+      resetsAt: Date.parse('2026-07-08T09:59:59+00:00'),
+    },
+  ]);
+});
+
+test('parseWeeklyScoped keeps the stable scope id when the API supplies one', () => {
+  const scoped = _private.parseWeeklyScoped({
+    limits: [
+      {
+        kind: 'weekly_scoped',
+        group: 'weekly',
+        percent: 32,
+        resets_at: '2026-07-08T09:59:59+00:00',
+        scope: { model: { id: 'claude-fable-5', display_name: 'Fable' } },
+      },
+    ],
+  });
+  assert.equal(scoped[0].id, 'claude-fable-5');
+  assert.equal(scoped[0].label, 'Fable');
+});
+
+test('parseWeeklyScoped skips scoped entries with a non-numeric percent', () => {
+  const scoped = _private.parseWeeklyScoped({
+    limits: [
+      { kind: 'weekly_scoped', group: 'weekly', percent: null, scope: { model: { display_name: 'Fable' } } },
+    ],
+  });
+  assert.deepEqual(scoped, []);
+});
+
+test('parseWeeklyScoped falls back to the legacy seven_day_sonnet bucket', () => {
+  // Older API responses (no `limits` array) still carried the scoped weekly
+  // cap in the flat `seven_day_sonnet` field. Keep surfacing it as Sonnet.
+  const scoped = _private.parseWeeklyScoped({
+    seven_day_sonnet: { utilization: 8, resets_at: '2026-07-08T10:00:00+00:00' },
+  });
+  assert.deepEqual(scoped, [
+    {
+      id: null,
+      label: 'Sonnet',
+      utilization: 0.08,
+      resetsAt: Date.parse('2026-07-08T10:00:00+00:00'),
+    },
+  ]);
+  assert.deepEqual(_private.parseWeeklyScoped({}), []);
+});
+
+test('parseWeeklyScoped falls back to legacy when limits carry no weekly_scoped entry', () => {
+  // A partial rollout can send the `limits` array while the scoped cap still
+  // lives only in the flat field. Don't let the meter vanish in that window.
+  const scoped = _private.parseWeeklyScoped({
+    limits: [
+      { kind: 'session', group: 'session', percent: 49 },
+      { kind: 'weekly_all', group: 'weekly', percent: 17 },
+    ],
+    seven_day_sonnet: { utilization: 8, resets_at: '2026-07-08T10:00:00+00:00' },
+  });
+  assert.deepEqual(scoped, [
+    {
+      id: null,
+      label: 'Sonnet',
+      utilization: 0.08,
+      resetsAt: Date.parse('2026-07-08T10:00:00+00:00'),
+    },
+  ]);
+  // Empty limits + no legacy bucket → nothing to show.
+  assert.deepEqual(_private.parseWeeklyScoped({ limits: [] }), []);
+});
+
 test('extractPlanLabel parses Claude rateLimitTier into a human label', () => {
   // Observed in `~/.claude/.credentials.json`:
   //   "rateLimitTier": "default_claude_max_5x"

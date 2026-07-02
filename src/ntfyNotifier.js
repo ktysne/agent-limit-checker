@@ -14,7 +14,6 @@ const SERVICE_WINDOWS = [
     buckets: [
       { bucketId: 'fiveHour', windowType: 'fiveHour', windowLabel: '5時間' },
       { bucketId: 'weekly', windowType: 'weekly', windowLabel: '週次' },
-      { bucketId: 'weeklySonnet', windowType: 'weekly', windowLabel: '週次 (Sonnet)' },
     ],
   },
   {
@@ -104,6 +103,40 @@ function collectResetEvents(snapshot, settings) {
         windowType: bucket.windowType,
         windowLabel: bucket.windowLabel,
         resetsAt: limit.resetsAt,
+      });
+    }
+
+    // Per-model weekly caps (e.g. Fable) arrive as an array whose members
+    // carry their own model label. Treat each as a weekly window under the
+    // same opt-in as the overall weekly reset.
+    if (isWindowTypeEnabled(config, 'weekly') && Array.isArray(svc.data.weeklyScoped)) {
+      const labelSeen = new Map();
+      svc.data.weeklyScoped.forEach((scoped) => {
+        if (!scoped || !validResetAt(scoped.resetsAt)) return;
+        // Key off the stable scope id when the API supplies one, so a display
+        // rename doesn't re-fire the notification. Otherwise fall back to the
+        // label, appending an ordinal only when the same label repeats. That
+        // stays stable across API reordering (unlike a bare index) yet still
+        // guarantees two same-labelled scopes never collide onto one key,
+        // which would silently drop one model's reset. The label is
+        // display-only, in windowLabel.
+        let scopeKey;
+        if (scoped.id) {
+          scopeKey = scoped.id;
+        } else {
+          const n = labelSeen.get(scoped.label) || 0;
+          labelSeen.set(scoped.label, n + 1);
+          scopeKey = n === 0 ? scoped.label : `${scoped.label}#${n}`;
+        }
+        events.push({
+          key: `${service.serviceId}:weeklyScoped:${scopeKey}`,
+          serviceId: service.serviceId,
+          serviceLabel: service.serviceLabel,
+          bucketId: `weeklyScoped:${scopeKey}`,
+          windowType: 'weekly',
+          windowLabel: `週次 (${scoped.label})`,
+          resetsAt: scoped.resetsAt,
+        });
       });
     }
   }

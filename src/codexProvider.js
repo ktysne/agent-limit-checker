@@ -388,7 +388,7 @@ async function fetch() {
   return {
     fiveHour: windowToRateLimit(pickWindow(dto, 300)),
     weekly: windowToRateLimit(pickWindow(dto, 10080)),
-    weeklySonnet: null,
+    weeklyScoped: [],
     plan: extractPlanLabel(dto),
   };
 }
