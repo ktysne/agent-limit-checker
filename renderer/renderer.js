@@ -98,7 +98,10 @@ function renderService(target, svc, loginInProgress) {
   if (usage.plan) {
     html += `<div class="plan-label">Plan: ${escapeHtml(usage.plan)}</div>`;
   }
-  html += renderBucket('5時間', usage.fiveHour);
+  // Render a meter only for windows the API actually reports. A provider can
+  // drop a window entirely — e.g. Codex temporarily removed its 5-hour limit,
+  // so `fiveHour` comes back null and we hide the bucket instead of showing N/A.
+  if (usage.fiveHour) html += renderBucket('5時間', usage.fiveHour);
   if (usage.weekly) html += renderBucket('週次', usage.weekly, { compact: true });
   // Per-model weekly caps (e.g. Fable) come through as an array; render one
   // meter each, labelled by the model name the API reports. `label` is
