@@ -44,6 +44,90 @@ test('extractPlanLabel returns null when no planType anywhere', () => {
   );
 });
 
+test('parseCredits surfaces a positive purchased-credit balance', () => {
+  // Observed on account/rateLimits/read: balance is a decimal *string* in USD.
+  const credits = _private.parseCredits({
+    rateLimits: { credits: { hasCredits: true, unlimited: false, balance: '115.9354600000' } },
+  });
+  assert.equal(credits.currency, 'USD');
+  assert.equal(credits.unlimited, false);
+  assert.ok(Math.abs(credits.amount - 115.93546) < 1e-9, `amount was ${credits.amount}`);
+});
+
+test('parseCredits hides the row without credits / zero / missing node', () => {
+  // hasCredits:false → account can't spend credits, hide.
+  assert.equal(
+    _private.parseCredits({ rateLimits: { credits: { hasCredits: false, balance: '10' } } }),
+    null,
+  );
+  // hasCredits:true but a drained balance is still "nothing to show".
+  assert.equal(
+    _private.parseCredits({ rateLimits: { credits: { hasCredits: true, balance: '0' } } }),
+    null,
+  );
+  assert.equal(_private.parseCredits({ rateLimits: {} }), null);
+  assert.equal(_private.parseCredits({}), null);
+  assert.equal(_private.parseCredits(null), null);
+});
+
+test('parseCredits reports unlimited credits distinctly', () => {
+  assert.deepEqual(
+    _private.parseCredits({
+      rateLimits: { credits: { hasCredits: true, unlimited: true, balance: null } },
+    }),
+    { amount: null, currency: 'USD', unlimited: true },
+  );
+});
+
+test('parseCredits falls back to rateLimitsByLimitId for the credits node', () => {
+  // Sorted key iteration: "alpha" before "beta", so alpha's credits win.
+  const credits = _private.parseCredits({
+    rateLimitsByLimitId: {
+      beta: { credits: { hasCredits: true, unlimited: false, balance: '10' } },
+      alpha: { credits: { hasCredits: true, unlimited: false, balance: '5' } },
+    },
+  });
+  assert.equal(credits.amount, 5);
+});
+
+test('parseCredits prefers the top-level rateLimits credits over a profile', () => {
+  const credits = _private.parseCredits({
+    rateLimits: { credits: { hasCredits: true, unlimited: false, balance: '42' } },
+    rateLimitsByLimitId: {
+      alpha: { credits: { hasCredits: true, unlimited: false, balance: '5' } },
+    },
+  });
+  assert.equal(credits.amount, 42);
+});
+
+test('parseCredits skips a credit-less node in favor of one that has credits', () => {
+  // A hasCredits:false primary must not mask a profile that actually has a
+  // balance (all profiles usually agree, but don't rely on it).
+  const credits = _private.parseCredits({
+    rateLimits: { credits: { hasCredits: false, balance: '0' } },
+    rateLimitsByLimitId: {
+      alpha: { credits: { hasCredits: true, unlimited: false, balance: '7' } },
+    },
+  });
+  assert.equal(credits.amount, 7);
+});
+
+test('parseCredits hides a negative or non-numeric balance', () => {
+  assert.equal(
+    _private.parseCredits({ rateLimits: { credits: { hasCredits: true, balance: '-5' } } }),
+    null,
+  );
+  // hasCredits:true but no usable number → hide, don't crash.
+  assert.equal(
+    _private.parseCredits({ rateLimits: { credits: { hasCredits: true, balance: null } } }),
+    null,
+  );
+  assert.equal(
+    _private.parseCredits({ rateLimits: { credits: { hasCredits: true, balance: 'oops' } } }),
+    null,
+  );
+});
+
 test('codex auth file path honors CODEX_HOME', () => {
   const previous = process.env.CODEX_HOME;
   const codexHome = path.join('tmp', 'custom-codex-home');

@@ -165,6 +165,11 @@ agent-limit-checker/
   ```
 - `utilization` は 0〜100 (パーセント)。1.0 を超えうる。
 - HTTP リダイレクトは追わない (トークン漏洩防止)。
+- **利用可能クレジット** (2026-07-19 追加): レスポンス末尾に `spend` オブジェクトがあり、`spend.balance` が使用クレジット残高。形は `spend.used` / `spend.limit` と同じ money 形式:
+  ```json
+  "spend": { "balance": { "amount_minor": 500, "currency": "USD", "exponent": 2 } }
+  ```
+  残高が無いアカウント (プランのみ) では `spend.balance: null`。`src/claudeProvider.js#parseCredits` が `amount_minor / 10^exponent` で major 単位に正規化し、正の残高のときだけ `{ amount, currency, unlimited:false }` を返す (無ければ `null` → UI で項目非表示)。旧レスポンスは `spend` 自体が無いので同じく `null`。
 
 ### Codex usage (JSON-RPC over stdio)
 - spawn: `codex app-server` (Windows は `cmd /c codex.cmd app-server`)
@@ -183,3 +188,8 @@ agent-limit-checker/
   }
   ```
 - `usedPercent`: 0〜100 Int / `resetsAt`: Unix epoch 秒 / 300 分=5h, 10080 分=週次。
+- **利用可能クレジット** (2026-07-19 追加): `rateLimits`(および各 `rateLimitsByLimitId[*]`) に `credits` が付く:
+  ```json
+  "credits": { "hasCredits": true, "unlimited": false, "balance": "115.9354600000" }
+  ```
+  `balance` は USD の major 単位 (ドル) を表す **10 進文字列**。`src/codexProvider.js#parseCredits` は `hasCredits:true` かつ残高が正のときだけ `{ amount, currency:'USD', unlimited:false }` を返す。`unlimited:true` は `{ amount:null, unlimited:true }` として区別 (UI は「無制限」表示)。それ以外は `null` → UI で項目非表示。`credits` ノードは `rateLimits` 優先、無ければ `rateLimitsByLimitId` をキー昇順で探索 (extractPlanLabel と同じ選択規則)。
