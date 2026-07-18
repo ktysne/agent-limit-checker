@@ -194,6 +194,30 @@ function parseWeeklyScoped(json) {
   return legacy ? [{ id: null, label: 'Sonnet', ...legacy }] : [];
 }
 
+// Anthropic surfaces a usage-credit balance under `spend.balance`, using the
+// same money shape as `spend.used` / `spend.limit`:
+//   { "amount_minor": 500, "currency": "USD", "exponent": 2 }  → $5.00
+// `spend.balance` comes back `null` whenever the account has no credit balance
+// (the common case for plan-only accounts) — we return null so the UI hides the
+// row instead of showing a bogus $0. Older API responses predate the `spend`
+// object entirely; those also fall through to null. `amount` is normalized to
+// major currency units (dollars) so the renderer only has to format it.
+function parseCredits(json) {
+  const spend = json && json.spend;
+  const balance = spend && spend.balance;
+  if (!balance || typeof balance !== 'object') return null;
+  const amountMinor = Number(balance.amount_minor);
+  const exponent = Number(balance.exponent);
+  if (!Number.isFinite(amountMinor) || !Number.isFinite(exponent)) return null;
+  const amount = amountMinor / 10 ** exponent;
+  // No balance (or a rounding artefact that lands at/below zero) → hide.
+  if (!(amount > 0)) return null;
+  const currency = typeof balance.currency === 'string' && balance.currency
+    ? balance.currency
+    : 'USD';
+  return { amount, currency, unlimited: false };
+}
+
 async function fetchUsage(accessToken) {
   const { json } = await httpGetJson(USAGE_URL, {
     Authorization: `Bearer ${accessToken}`,
@@ -206,6 +230,7 @@ async function fetchUsage(accessToken) {
     fiveHour: parseBucket(json.five_hour),
     weekly: parseBucket(json.seven_day),
     weeklyScoped: parseWeeklyScoped(json),
+    credits: parseCredits(json),
   };
 }
 
@@ -516,6 +541,7 @@ module.exports = {
     shouldRefresh,
     parseBucket,
     parseWeeklyScoped,
+    parseCredits,
     extractPlanLabel,
     buildChildEnv,
   },

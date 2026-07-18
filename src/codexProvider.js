@@ -381,6 +381,42 @@ function extractPlanLabel(dto) {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }
 
+// The purchased-credit balance rides along in the same node as the rate limits.
+// Consider the top-level `rateLimits.credits` first, then each profile in
+// `rateLimitsByLimitId` in sorted key order (matching extractPlanLabel) so the
+// choice is deterministic across runs. Prefer a node that actually reports
+// `hasCredits`, so a credit-less primary can't mask a profile that has a
+// balance; fall back to the first credits node otherwise (keeps deterministic
+// selection and lets `unlimited` still surface).
+function pickCreditsNode(dto) {
+  const nodes = [];
+  if (dto && dto.rateLimits && dto.rateLimits.credits) nodes.push(dto.rateLimits.credits);
+  const byId = dto && dto.rateLimitsByLimitId;
+  if (byId && typeof byId === 'object') {
+    for (const k of Object.keys(byId).sort()) {
+      const node = byId[k];
+      if (node && node.credits) nodes.push(node.credits);
+    }
+  }
+  return nodes.find((n) => n && n.hasCredits === true) || nodes[0] || null;
+}
+
+// `account/rateLimits/read` reports credits as:
+//   { "hasCredits": true, "unlimited": false, "balance": "115.9354600000" }
+// `balance` is a decimal *string* in USD major units (dollars). We only surface
+// a number when the account actually has credits and the amount is positive, so
+// the UI hides the row (rather than showing $0) for credit-less accounts.
+// `unlimited` accounts carry no meaningful number — surface them distinctly so
+// the renderer can say "無制限" instead of printing a bogus 0.
+function parseCredits(dto) {
+  const node = pickCreditsNode(dto);
+  if (!node || typeof node !== 'object' || node.hasCredits !== true) return null;
+  if (node.unlimited === true) return { amount: null, currency: 'USD', unlimited: true };
+  const amount = Number(node.balance);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return { amount, currency: 'USD', unlimited: false };
+}
+
 const client = new CodexClient();
 
 async function fetch() {
@@ -389,6 +425,7 @@ async function fetch() {
     fiveHour: windowToRateLimit(pickWindow(dto, 300)),
     weekly: windowToRateLimit(pickWindow(dto, 10080)),
     weeklyScoped: [],
+    credits: parseCredits(dto),
     plan: extractPlanLabel(dto),
   };
 }
@@ -403,5 +440,7 @@ module.exports = {
   fetch,
   shutdown,
   authFilePath: codexAuthFile,
-  _private: { codexAuthFile, extractPlanLabel, isRestartableError, makeCodexRpcError },
+  _private: {
+    codexAuthFile, extractPlanLabel, parseCredits, isRestartableError, makeCodexRpcError,
+  },
 };

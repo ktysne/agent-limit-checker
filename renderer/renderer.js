@@ -65,6 +65,41 @@ function renderBucket(label, limit, { compact = false } = {}) {
   `;
 }
 
+// Format a credit balance in its own currency. The provider already normalizes
+// `amount` to major units (dollars), so this is purely display. Falls back to a
+// plain "<amount> <currency>" string if the runtime lacks the currency data for
+// Intl (never observed in Chromium, but keeps the row from vanishing).
+function formatCredit(amount, currency) {
+  const n = Number(amount);
+  // Only a positive balance is worth a row. The provider already enforces this,
+  // but guarding here means a stray null/0/negative amount hides the row rather
+  // than printing a misleading "$0.00".
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const cur = currency || 'USD';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${cur}`;
+  }
+}
+
+// Show the available credit balance for a service, or nothing when there is no
+// balance to show. The provider returns `credits: null` for credit-less
+// accounts (Anthropic's `spend.balance: null`, or codex's `hasCredits: false`),
+// so the row is hidden entirely rather than showing $0 — per the "残高がない
+// 場合は項目ごと非表示" requirement.
+function renderCredits(credits) {
+  if (!credits) return '';
+  const value = credits.unlimited ? '無制限' : formatCredit(credits.amount, credits.currency);
+  if (!value) return '';
+  return `
+    <div class="credit-row">
+      <span class="bucket-label">クレジット残高</span>
+      <span class="credit-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
 function renderService(target, svc, loginInProgress) {
   const body = document.querySelector(`[data-body="${target}"]`);
   if (!body) return;
@@ -111,6 +146,8 @@ function renderService(target, svc, loginInProgress) {
       html += renderBucket(`週次 (${escapeHtml(scoped.label)})`, scoped, { compact: true });
     }
   }
+  // Available credit balance, only when the account actually has one.
+  html += renderCredits(usage.credits);
   body.innerHTML = html;
 }
 

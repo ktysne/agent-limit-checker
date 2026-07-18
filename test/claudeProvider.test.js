@@ -153,6 +153,52 @@ test('parseWeeklyScoped falls back to legacy when limits carry no weekly_scoped 
   assert.deepEqual(_private.parseWeeklyScoped({ limits: [] }), []);
 });
 
+test('parseCredits reads the usage-credit balance from spend.balance', () => {
+  // Observed shape on /api/oauth/usage: `spend.balance` mirrors spend.used /
+  // spend.limit — { amount_minor, currency, exponent }. exponent 2 → cents.
+  const credits = _private.parseCredits({
+    spend: { balance: { amount_minor: 2599, currency: 'USD', exponent: 2 } },
+  });
+  assert.equal(credits.currency, 'USD');
+  assert.equal(credits.unlimited, false);
+  assert.ok(Math.abs(credits.amount - 25.99) < 1e-9, `amount was ${credits.amount}`);
+});
+
+test('parseCredits hides the row when there is no positive balance', () => {
+  // `spend.balance: null` is the common plan-only case — hide, do not show $0.
+  assert.equal(_private.parseCredits({ spend: { balance: null } }), null);
+  assert.equal(_private.parseCredits({ spend: {} }), null);
+  // Older responses predate the `spend` object entirely.
+  assert.equal(_private.parseCredits({}), null);
+  assert.equal(_private.parseCredits(null), null);
+  // A zeroed-out balance is still "no credits available".
+  assert.equal(
+    _private.parseCredits({ spend: { balance: { amount_minor: 0, currency: 'USD', exponent: 2 } } }),
+    null,
+  );
+  // Missing amount/exponent → can't trust the number, so hide.
+  assert.equal(
+    _private.parseCredits({ spend: { balance: { currency: 'USD' } } }),
+    null,
+  );
+  // A negative balance is not something to advertise.
+  assert.equal(
+    _private.parseCredits({ spend: { balance: { amount_minor: -100, currency: 'USD', exponent: 2 } } }),
+    null,
+  );
+  // `balance` must be the money object, not a bare number/string.
+  assert.equal(_private.parseCredits({ spend: { balance: 5 } }), null);
+  assert.equal(_private.parseCredits({ spend: { balance: '5' } }), null);
+});
+
+test('parseCredits defaults the currency to USD when the API omits it', () => {
+  const credits = _private.parseCredits({
+    spend: { balance: { amount_minor: 500, exponent: 2 } },
+  });
+  assert.equal(credits.currency, 'USD');
+  assert.equal(credits.amount, 5);
+});
+
 test('extractPlanLabel parses Claude rateLimitTier into a human label', () => {
   // Observed in `~/.claude/.credentials.json`:
   //   "rateLimitTier": "default_claude_max_5x"
