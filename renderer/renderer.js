@@ -68,9 +68,9 @@ function renderBucket(label, limit, { compact = false } = {}) {
 // Format a credit balance for display. Two shapes, distinguished by `currency`:
 //   - a currency code (Claude's `spend.balance`, e.g. "USD") → a money amount,
 //     formatted like "$5.00".
-//   - null (codex credits) → a plain credit *count*, not money. We match the
-//     official `codex /status` and render "<rounded> クレジット", rounding to a
-//     whole credit.
+//   - null (codex credits) → a plain credit *count*, not money. We render
+//     "<balance> クレジット" to 2 decimals, rounding the 3rd decimal onward
+//     (115.9354… → "115.94").
 // The provider already normalizes `amount` (dollars for money, credit count for
 // codex), so this is purely display.
 function formatCredit(amount, currency) {
@@ -79,7 +79,9 @@ function formatCredit(amount, currency) {
   // but guarding here means a stray null/0/negative amount hides the row rather
   // than printing a misleading "0".
   if (!Number.isFinite(n) || n <= 0) return null;
-  if (!currency) return `${Math.round(n)} クレジット`;
+  // toFixed(2) rounds to the nearest hundredth (round half up), which is exactly
+  // "小数第3位以下を四捨五入して2桁表示".
+  if (!currency) return `${n.toFixed(2)} クレジット`;
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(n);
   } catch {
