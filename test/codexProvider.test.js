@@ -45,11 +45,13 @@ test('extractPlanLabel returns null when no planType anywhere', () => {
 });
 
 test('parseCredits surfaces a positive purchased-credit balance', () => {
-  // Observed on account/rateLimits/read: balance is a decimal *string* in USD.
+  // Observed on account/rateLimits/read: balance is a decimal *string* that
+  // counts Codex credits (NOT dollars) — currency is null so the renderer shows
+  // "<n> クレジット", matching codex's own `/status`.
   const credits = _private.parseCredits({
     rateLimits: { credits: { hasCredits: true, unlimited: false, balance: '115.9354600000' } },
   });
-  assert.equal(credits.currency, 'USD');
+  assert.equal(credits.currency, null);
   assert.equal(credits.unlimited, false);
   assert.ok(Math.abs(credits.amount - 115.93546) < 1e-9, `amount was ${credits.amount}`);
 });
@@ -75,7 +77,7 @@ test('parseCredits reports unlimited credits distinctly', () => {
     _private.parseCredits({
       rateLimits: { credits: { hasCredits: true, unlimited: true, balance: null } },
     }),
-    { amount: null, currency: 'USD', unlimited: true },
+    { amount: null, currency: null, unlimited: true },
   );
 });
 
