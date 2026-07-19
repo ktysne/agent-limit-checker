@@ -403,18 +403,22 @@ function pickCreditsNode(dto) {
 
 // `account/rateLimits/read` reports credits as:
 //   { "hasCredits": true, "unlimited": false, "balance": "115.9354600000" }
-// `balance` is a decimal *string* in USD major units (dollars). We only surface
-// a number when the account actually has credits and the amount is positive, so
-// the UI hides the row (rather than showing $0) for credit-less accounts.
-// `unlimited` accounts carry no meaningful number — surface them distinctly so
-// the renderer can say "無制限" instead of printing a bogus 0.
+// `balance` is a decimal *string* — a count of Codex **credits**, NOT a dollar
+// amount. The type (app-server-protocol CreditsSnapshot) has no currency field,
+// and codex's own `/status` renders it as "<rounded> credits" (never "$..."),
+// so we mark it as a non-monetary count with `currency: null` and let the
+// renderer round it to a whole credit the same way. We only surface a number
+// when the account actually has credits and the amount is positive, so the UI
+// hides the row (rather than showing 0) for credit-less accounts. `unlimited`
+// accounts carry no meaningful number — surface them distinctly so the renderer
+// can say "無制限" instead of printing a bogus 0.
 function parseCredits(dto) {
   const node = pickCreditsNode(dto);
   if (!node || typeof node !== 'object' || node.hasCredits !== true) return null;
-  if (node.unlimited === true) return { amount: null, currency: 'USD', unlimited: true };
+  if (node.unlimited === true) return { amount: null, currency: null, unlimited: true };
   const amount = Number(node.balance);
   if (!Number.isFinite(amount) || amount <= 0) return null;
-  return { amount, currency: 'USD', unlimited: false };
+  return { amount, currency: null, unlimited: false };
 }
 
 const client = new CodexClient();

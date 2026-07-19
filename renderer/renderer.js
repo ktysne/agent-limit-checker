@@ -65,21 +65,25 @@ function renderBucket(label, limit, { compact = false } = {}) {
   `;
 }
 
-// Format a credit balance in its own currency. The provider already normalizes
-// `amount` to major units (dollars), so this is purely display. Falls back to a
-// plain "<amount> <currency>" string if the runtime lacks the currency data for
-// Intl (never observed in Chromium, but keeps the row from vanishing).
+// Format a credit balance for display. Two shapes, distinguished by `currency`:
+//   - a currency code (Claude's `spend.balance`, e.g. "USD") → a money amount,
+//     formatted like "$5.00".
+//   - null (codex credits) → a plain credit *count*, not money. We match the
+//     official `codex /status` and render "<rounded> クレジット", rounding to a
+//     whole credit.
+// The provider already normalizes `amount` (dollars for money, credit count for
+// codex), so this is purely display.
 function formatCredit(amount, currency) {
   const n = Number(amount);
   // Only a positive balance is worth a row. The provider already enforces this,
   // but guarding here means a stray null/0/negative amount hides the row rather
-  // than printing a misleading "$0.00".
+  // than printing a misleading "0".
   if (!Number.isFinite(n) || n <= 0) return null;
-  const cur = currency || 'USD';
+  if (!currency) return `${Math.round(n)} クレジット`;
   try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n);
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(n);
   } catch {
-    return `${n.toFixed(2)} ${cur}`;
+    return `${n.toFixed(2)} ${currency}`;
   }
 }
 

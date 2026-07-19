@@ -188,8 +188,9 @@ agent-limit-checker/
   }
   ```
 - `usedPercent`: 0〜100 Int / `resetsAt`: Unix epoch 秒 / 300 分=5h, 10080 分=週次。
-- **利用可能クレジット** (2026-07-19 追加): `rateLimits`(および各 `rateLimitsByLimitId[*]`) に `credits` が付く:
+- **利用可能クレジット** (2026-07-19 追加 / 07-20 単位訂正): `rateLimits`(および各 `rateLimitsByLimitId[*]`) に `credits` が付く:
   ```json
   "credits": { "hasCredits": true, "unlimited": false, "balance": "115.9354600000" }
   ```
-  `balance` は USD の major 単位 (ドル) を表す **10 進文字列**。`src/codexProvider.js#parseCredits` は `hasCredits:true` かつ残高が正のときだけ `{ amount, currency:'USD', unlimited:false }` を返す。`unlimited:true` は `{ amount:null, unlimited:true }` として区別 (UI は「無制限」表示)。それ以外は `null` → UI で項目非表示。`credits` ノードは `rateLimits` 優先、無ければ `rateLimitsByLimitId` をキー昇順で探索 (extractPlanLabel と同じ選択規則)。
+  ⚠ `balance` は **ドルではなく Codex「クレジット」の数**を表す 10 進文字列。型 (`app-server-protocol` の `CreditsSnapshot = { hasCredits, unlimited, balance:string|null }`) に currency は無く、codex 本体の `/status` も `"<四捨五入> credits"` と表示する (`$` は付けない)。よって `src/codexProvider.js#parseCredits` は `currency:null`（＝金額ではなく計数）でマークし、`hasCredits:true` かつ残高が正のときだけ `{ amount, currency:null, unlimited:false }` を返す。UI (`formatCredit`) は `currency` が無いとき `Math.round(amount)` して「N クレジット」と表示 (codex と同じ丸め)。`unlimited:true` は `{ amount:null, currency:null, unlimited:true }` として区別 (UI は「無制限」)。それ以外は `null` → UI で項目非表示。`credits` ノードは `rateLimits` 優先、無ければ `rateLimitsByLimitId` をキー昇順で探索し、さらに `hasCredits:true` のノードを優先 (extractPlanLabel と同じ選択規則 + クレジット有無で優先)。
+  - 対して Claude 側の `spend.balance` は `currency:"USD"` 付きの**本物の金額**なので、そちらは従来どおり通貨表示 (`$5.00`)。両者は単位が異なる。
