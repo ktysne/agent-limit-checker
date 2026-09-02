@@ -1,6 +1,6 @@
 # Agent Limit Checker — 開発ガイド (運用ルール)
 
-このファイルは、本リポジトリで作業するときに Claude (またはレビュアー) が参照する運用ルールをまとめたものです。
+このファイルは、本リポジトリで作業するときに AI エージェント (Claude / Codex、またはレビュアー) が参照する運用ルールをまとめたものです。
 
 ---
 
@@ -96,20 +96,3 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 
 ---
 
-## AI 相互レビュー（Claude ↔ Codex）
-
-このリポジトリは汎用ツール [ai-cross-review](https://github.com/ktysne/ai-cross-review) を組み込んでいる（そのままコピーして使う vendoring 方式）。実装が一区切りしたら、**実装 → レビュー → 指摘対応 → 妥当性確認** の往復を Claude / Codex を入れ替えて回す。
-
-**実装完了後の起点（必須）**: 改修を一区切りしたら、完了にする前に次の 3 択を提示する（勝手にコミット / PR で締めない）。
-- **A. レビューを依頼**: `npm run review:codex`（codex は read-only でファイルを変えない）。結果を読んで修正し、もう一度 `npm run review:codex` で妥当性確認。
-- **B. レビューと修正を依頼**: `npm run review:codex:fix`（codex が作業ツリーを直接修正）。修正差分（`git diff`）をレビューしてから採用。
-- **C. 何もしない**。
-
-- レビュー観点 `.cross-review.md`（このリポ固有）は CLI が自動で添付する。
-- レビューと修正の往復は **最大 3 回まで**。指摘・対応・妥当性確認は **PR コメントに記録**する。
-- `npm run review:codex*` は codex がネットワークを使うため、サンドボックスを無効にして実行する。
-- 詳しい手順は [docs/cross-review.md](docs/cross-review.md) を参照。
-
-**トークン節約と差分制御（upstream PR #10–15）**: 既定のレビュー対象は **`origin/main` 優先解決のコミット済み差分**（解決できなければローカル `main`）。差分サイズは常に stderr 表示し、閾値超過（既定 256KB・`--max-diff-kb` / `CROSS_REVIEW_MAX_DIFF_KB`、`0` で無効）ならレビュアーを起動せず中断する。ロックファイル・生成物（`package-lock.json` / `*.min.js` / `*.map` 等）は**既定で差分から除外**（`.cross-review-ignore` で追加・`CROSS_REVIEW_IGNORE` でパス指定・`--no-exclude` で無効化）。巨大ファイル差分は **stat 要約に置換**（`--max-file-diff-kb`、既定 64KB・`0` で無効）。未コミットの実装を見るなら `-- --uncommitted`。
-
-**取り込み（vendored）**: `tools/cross-review.js` / `tools/cross-review.sync.js` / `docs/cross-review.md` / `.cross-review.example.md` は ai-cross-review からのコピーなので直接編集しない。**更新は `npm run sync`**（= `node tools/cross-review.sync.js`。マニフェスト `tools/cross-review.sync.json` に従い upstream main から機械同期。`npm run sync:check` でドリフト検査）。このリポで編集するのは `.cross-review.md`（観点）だけ。
