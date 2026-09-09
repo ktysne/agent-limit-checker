@@ -6,7 +6,9 @@ Windows のシステムトレイに常駐し、**Claude Code** と **Codex** の
 - Windows 10 / 11
 - Node.js 22.12+ (Electron 42 のインストール / ビルドに必要)
 - `claude` CLI ログイン済み (`~/.claude/.credentials.json` が存在)
-- `codex` CLI ログイン済み (`~/.codex/auth.json` が存在)
+- `codex` CLI ログイン済み (ホームディレクトリ直下に `.codex` で始まるディレクトリがあり、その中に `auth.json` か `config.toml` が存在)
+  - `~/.codex` と `~/.codex-review` のように複数のホームを使い分けている場合、条件を満たすホームをそれぞれ 1 アカウントとして表示する
+  - `CODEX_HOME` を設定している場合は、そのパスも 1 アカウントとして扱う
 
 ## 使い方
 ```powershell
@@ -19,6 +21,7 @@ npm start
 - 既定のポーリング間隔は 5 分
 - エラー時はトレイ tooltip / メニューにも `login required` などを表示
 - ntfy アプリで購読する Topic URL を設定すると、5時間 / 週次リセット時刻のスマホ通知を個別に opt-in できます
+- 設定画面の「Codex 表示名」で、Codex アカウントごとの表示名をホームディレクトリ名単位で変更できます (例: `.codex-sub` → `Codex Sub`)。ポップオーバー、トレイの tooltip / メニュー、ntfy 通知文のすべてに反映され、空にすると既定の名前 (`Codex` / `Codex (.codex-sub)`) に戻ります
 
 ## ntfy 通知
 スマホ側の ntfy アプリで推測されにくいトピックを購読し、その Topic URL (例: `https://ntfy.sh/your-random-topic`) を設定してください。

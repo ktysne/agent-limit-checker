@@ -1,31 +1,44 @@
 'use strict';
 
+const { accountDisplayName } = require('./codexHomes');
+
 const USER_AGENT = 'agent-limit-checker/1.0';
 const DUE_GRACE_MS = 30 * 60 * 1000;
 const RETRY_DELAY_MS = 5 * 1000;
 const MAX_RETRY_ATTEMPTS = 3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-const SERVICE_WINDOWS = [
-  {
+const RESET_BUCKETS = [
+  { bucketId: 'fiveHour', windowType: 'fiveHour', windowLabel: '5時間' },
+  { bucketId: 'weekly', windowType: 'weekly', windowLabel: '週次' },
+];
+
+// The notifiable services behind one snapshot. Claude is a single service;
+// Codex contributes one service per configured account, so a two-account setup
+// gets two independent sets of reset notifications. `serviceId` carries the
+// account id, which keeps the dedup keys of two accounts from colliding (one
+// account's notification must never suppress the other's).
+function servicesForSnapshot(snapshot) {
+  const services = [{
     serviceId: 'claude',
     serviceLabel: 'Claude Code',
-    snapshotKey: 'claude',
-    buckets: [
-      { bucketId: 'fiveHour', windowType: 'fiveHour', windowLabel: '5時間' },
-      { bucketId: 'weekly', windowType: 'weekly', windowLabel: '週次' },
-    ],
-  },
-  {
-    serviceId: 'codex',
-    serviceLabel: 'Codex',
-    snapshotKey: 'codex',
-    buckets: [
-      { bucketId: 'fiveHour', windowType: 'fiveHour', windowLabel: '5時間' },
-      { bucketId: 'weekly', windowType: 'weekly', windowLabel: '週次' },
-    ],
-  },
-];
+    buckets: RESET_BUCKETS,
+    usage: snapshot && snapshot.claude,
+  }];
+  const accounts = Array.isArray(snapshot && snapshot.codexAccounts) ? snapshot.codexAccounts : [];
+  for (const account of accounts) {
+    services.push({
+      serviceId: `codex:${account.id}`,
+      // The snapshot carries the resolved name (the user's override included);
+      // the fallback covers a snapshot built without that decoration, e.g. in
+      // tests.
+      serviceLabel: account.displayName || accountDisplayName(account, accounts),
+      buckets: RESET_BUCKETS,
+      usage: account,
+    });
+  }
+  return services;
+}
 
 function cleanString(value) {
   if (typeof value !== 'string') return '';
@@ -87,8 +100,8 @@ function collectResetEvents(snapshot, settings) {
   if (!hasAnyNotificationEnabled(config)) return [];
   const events = [];
 
-  for (const service of SERVICE_WINDOWS) {
-    const svc = snapshot && snapshot[service.snapshotKey];
+  for (const service of servicesForSnapshot(snapshot)) {
+    const svc = service.usage;
     if (!svc || !svc.ok || !svc.data) continue;
 
     for (const bucket of service.buckets) {

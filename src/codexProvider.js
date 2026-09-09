@@ -2,9 +2,9 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { resolveCodexExecutable } = require('./cliPaths');
+const { defaultCodexHome, normalizeHomePath } = require('./codexHomes');
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const START_TIMEOUT_MS = 12_000;
@@ -16,20 +16,20 @@ function makeError(code, message, extra) {
   return err;
 }
 
-// codex persists its OAuth credentials here (honoring CODEX_HOME like the CLI).
-// The long-lived `app-server` reads this once at startup and caches the tokens
-// in memory.
-function codexAuthFile() {
-  const home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+// codex persists the OAuth credentials of one account inside its home
+// directory. The long-lived `app-server` reads this once at startup and caches
+// the tokens in memory. With no home given we use the one the CLI itself would
+// pick (CODEX_HOME, else ~/.codex).
+function codexAuthFile(home = defaultCodexHome()) {
   return path.join(home, 'auth.json');
 }
 
-// A cheap fingerprint of auth.json. When it changes, some *other* codex process
-// rewrote the credentials (see CodexClient.readRateLimits) and the tokens our
-// app-server cached at startup are stale.
-function authSignature() {
+// A cheap fingerprint of one home's auth.json. When it changes, some *other*
+// codex process rewrote the credentials (see CodexClient.readRateLimits) and
+// the tokens our app-server cached at startup are stale.
+function authSignature(home) {
   try {
-    const st = fs.statSync(codexAuthFile());
+    const st = fs.statSync(codexAuthFile(home));
     return `${st.mtimeMs}:${st.size}`;
   } catch {
     return null; // missing / unreadable — treat as "unknown", never force a restart
@@ -77,7 +77,11 @@ function makeCodexRpcError(rawError) {
   return makeError('codex_rpc_error', message, { restartable });
 }
 
-// Long-lived JSON-RPC client over a single `codex app-server` child process.
+// Long-lived JSON-RPC client over a single `codex app-server` child process,
+// bound to exactly one Codex home (= one account). Multi-account setups run one
+// client per home; the binding must never change after construction, or the
+// cached auth fingerprint would be compared against a different account's
+// credentials.
 //
 // The app-server caches the OAuth tokens it read from auth.json at startup. If
 // any *other* codex process refreshes those credentials, refresh-token rotation
@@ -86,7 +90,8 @@ function makeCodexRpcError(rawError) {
 // against this two ways: it respawns when auth.json changes under us, and it
 // respawns + retries once when a read fails with a restartable error.
 class CodexClient {
-  constructor() {
+  constructor({ home } = {}) {
+    this.home = home || defaultCodexHome();
     this.proc = null;
     this.pending = new Map(); // id -> {resolve, reject, timer}
     this.nextId = 1;
@@ -113,7 +118,7 @@ class CodexClient {
       const lowered = exe.toLowerCase();
       const isPs1 = lowered.endsWith('.ps1');
       const isCmd = lowered.endsWith('.cmd') || lowered.endsWith('.bat');
-      const childEnv = buildChildEnv(process.env);
+      const childEnv = buildChildEnv(process.env, this.home);
 
       let proc;
       try {
@@ -179,7 +184,7 @@ class CodexClient {
       this._sendNotification('initialized', {});
       // Snapshot auth.json *after* the handshake so we can tell later whether
       // another codex process rotated the credentials under us.
-      this.authSignature = authSignature();
+      this.authSignature = authSignature(this.home);
     })();
 
     try {
@@ -211,7 +216,7 @@ class CodexClient {
     // tokens are stale — respawn first so we read the new credentials instead of
     // hitting a 401 on the request below.
     if (this.authSignature != null) {
-      const sig = authSignature();
+      const sig = authSignature(this.home);
       if (sig != null && sig !== this.authSignature) {
         await this._restart();
       }
@@ -319,7 +324,12 @@ class CodexClient {
   }
 }
 
-function buildChildEnv(base) {
+// The child sees only an allowlisted slice of our environment, with CODEX_HOME
+// pinned to the home this client owns. The override is what makes multi-account
+// work: the app-server reads its credentials from $CODEX_HOME/auth.json, so it
+// must never inherit our own CODEX_HOME (which would point every client at the
+// same account).
+function buildChildEnv(base, home) {
   const allow = [
     'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
     'USERNAME', 'TEMP', 'TMP', 'SystemRoot', 'windir',
@@ -330,6 +340,7 @@ function buildChildEnv(base) {
   for (const k of allow) {
     if (base[k] != null) env[k] = base[k];
   }
+  env.CODEX_HOME = home;
   return env;
 }
 
@@ -421,10 +432,23 @@ function parseCredits(dto) {
   return { amount, currency: null, unlimited: false };
 }
 
-const client = new CodexClient();
+// One long-lived app-server per Codex home, keyed by the normalized home path
+// so the same account never ends up with two processes. Entries are created on
+// demand and removed by shutdown().
+const clients = new Map();
 
-async function fetch() {
-  const dto = await client.readRateLimits();
+function clientFor(home) {
+  const key = normalizeHomePath(home);
+  let client = clients.get(key);
+  if (!client) {
+    client = new CodexClient({ home });
+    clients.set(key, client);
+  }
+  return client;
+}
+
+async function fetch(home = defaultCodexHome()) {
+  const dto = await clientFor(home).readRateLimits();
   return {
     fiveHour: windowToRateLimit(pickWindow(dto, 300)),
     weekly: windowToRateLimit(pickWindow(dto, 10080)),
@@ -434,16 +458,33 @@ async function fetch() {
   };
 }
 
-async function shutdown() {
-  try {
-    client.stop();
-  } catch { /* ignore */ }
+// Stop one home's app-server, or every one of them when no home is given (app
+// quit). A stopped client is dropped from the registry so the next fetch spawns
+// a fresh process that re-reads auth.json — that is how a completed `codex
+// login` takes effect.
+async function shutdown(home) {
+  if (home === undefined || home === null) {
+    for (const client of clients.values()) {
+      try { client.stop(); } catch { /* ignore */ }
+    }
+    clients.clear();
+    return;
+  }
+  const key = normalizeHomePath(home);
+  const client = clients.get(key);
+  if (!client) return;
+  clients.delete(key);
+  try { client.stop(); } catch { /* ignore */ }
+}
+
+function authFilePath(home = defaultCodexHome()) {
+  return codexAuthFile(home);
 }
 
 module.exports = {
   fetch,
   shutdown,
-  authFilePath: codexAuthFile,
+  authFilePath,
   _private: {
     codexAuthFile, extractPlanLabel, parseCredits, isRestartableError, makeCodexRpcError,
   },

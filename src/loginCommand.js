@@ -18,15 +18,39 @@
 //     alike, so a single code path covers every shape resolveClaudeExecutable
 //     / resolveCodexExecutable can return.
 //
+const sq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+
+// PowerShell variable names are not quotable, so only a plain identifier can
+// safely be interpolated into `$env:<name>`. Anything else is dropped rather
+// than risking an injected statement.
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// `$env:NAME='value'; ` assignments prepended to the command, used to run the
+// login against a specific Codex home (CODEX_HOME). Values are single-quoted
+// with the same doubling escape as every other string here, so the no-double-
+// quote / single-line constraints above still hold.
+function buildEnvPrefix(options) {
+  const env = options && options.env;
+  if (!env || typeof env !== 'object') return '';
+  let prefix = '';
+  for (const name of Object.keys(env)) {
+    const value = env[name];
+    if (value == null || value === '') continue;
+    if (!ENV_NAME_RE.test(name)) continue;
+    prefix += `$env:${name}=${sq(value)}; `;
+  }
+  return prefix;
+}
+
 // `$LASTEXITCODE` is null when the invoked program never sets an exit code
 // (some shims); we treat null as success so a clean login still auto-closes.
-function buildLoginPsCommand(exe, cliArgs) {
-  const sq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+function buildLoginPsCommand(exe, cliArgs, options) {
+  const envPrefix = buildEnvPrefix(options);
   const invoke = ['&', sq(exe), ...cliArgs.map(sq)].join(' ');
   const okMsg = "'ログインが完了しました。このウィンドウは自動的に閉じます…'";
   const ngMsg = "('ログインに失敗しました (exit ' + $c + ')。Enter キーでこのウィンドウを閉じます。')";
   return (
-    `${invoke}; $c=$LASTEXITCODE; `
+    `${envPrefix}${invoke}; $c=$LASTEXITCODE; `
     + 'if ($c -eq 0 -or $null -eq $c) { '
     + `Write-Host ''; Write-Host ${okMsg} -ForegroundColor Green; Start-Sleep -Seconds 2 `
     + '} else { '
@@ -44,7 +68,6 @@ function buildLoginPsCommand(exe, cliArgs) {
 // here — the single-quote style is kept purely for consistency with the
 // visible login path.
 function buildSilentPsCommand(exe, cliArgs) {
-  const sq = (s) => `'${String(s).replace(/'/g, "''")}'`;
   return ['&', sq(exe), ...cliArgs.map(sq)].join(' ');
 }
 

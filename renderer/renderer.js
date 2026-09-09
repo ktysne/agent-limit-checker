@@ -7,6 +7,7 @@ const ERROR_HINTS = {
   claude_refresh_token_missing: 'refresh token がありません。🔑 ボタンから再ログインすると自動で復帰します。',
   codex_cli_missing: 'PowerShell で `npm i -g @openai/codex` を実行してください。',
   codex_rpc_error: '🔑 ボタンを押すと再ログインできます。完了すると自動で復帰します。',
+  codex_home_missing: '🔑 ボタンで codex login を実行すると ~/.codex が作成され、完了すると自動で復帰します。',
 };
 
 const AUTO_REAUTH_CODES = new Set(['claude_unauthorized', 'claude_credentials_missing']);
@@ -106,8 +107,9 @@ function renderCredits(credits) {
   `;
 }
 
-function renderService(target, svc, loginInProgress) {
-  const body = document.querySelector(`[data-body="${target}"]`);
+// Fill one service section's body. `body` is the .service-body element, so the
+// same renderer serves the static Claude section and every generated Codex one.
+function renderService(body, svc, loginInProgress) {
   if (!body) return;
   if (!svc) {
     body.innerHTML = '<div class="loading">取得中…</div>';
@@ -157,6 +159,67 @@ function renderService(target, svc, loginInProgress) {
   body.innerHTML = html;
 }
 
+// Identity of the Codex sections currently in the DOM, in order. Rebuilding the
+// sections makes the popover height jump, so we only do it when what the markup
+// depends on — the account set and the names shown in the headers — changed.
+let codexSectionKeys = [];
+
+// The heading of one section, and the home directory name under it. The heading
+// is the name resolved by the main process, so a user-set name replaces
+// "Codex (.codex-sub)" outright. The home name is then shown as a sub-label,
+// because a custom heading no longer says which home it belongs to; with a
+// default heading the home name is already in it (or there is only one account),
+// so the sub-label would just repeat it.
+function codexSectionHtml(account) {
+  const id = escapeHtml(account.id);
+  const name = escapeHtml(account.displayName || 'Codex');
+  const sub = account.customName
+    ? `<span class="service-sub">${escapeHtml(account.label)}</span>`
+    : '';
+  return `
+    <section class="service" data-account-id="${id}">
+      <div class="service-head">
+        <div class="service-title">
+          <span class="brand-dot brand-codex"></span>
+          <h2>${name}</h2>
+          ${sub}
+        </div>
+        <button class="icon-btn" data-login="codex" data-account-id="${id}" title="${name} の codex login を実行">🔑</button>
+      </div>
+      <div class="service-body">
+        <div class="loading">取得中…</div>
+      </div>
+    </section>
+  `;
+}
+
+// One section per Codex account. Before the first poll lands the snapshot has
+// no accounts yet; we still show a single section so the popover looks the same
+// as it does once the data arrives (and the 🔑 button already works — with no
+// id the main process falls back to the default home).
+function renderCodexAccounts(accounts, loginInProgress) {
+  const host = document.getElementById('codex-services');
+  if (!host) return;
+  const list = Array.isArray(accounts) && accounts.length > 0
+    ? accounts
+    : [{ id: '', label: '', pending: true }];
+  const keys = list.map((account) => `${account.id}\n${account.displayName || ''}\n${account.customName || ''}`);
+  if (keys.length !== codexSectionKeys.length || keys.some((key, i) => key !== codexSectionKeys[i])) {
+    host.innerHTML = list.map((account) => codexSectionHtml(account)).join('');
+    codexSectionKeys = keys;
+  }
+  const progress = loginInProgress && typeof loginInProgress === 'object' ? loginInProgress : {};
+  list.forEach((account, index) => {
+    const section = host.children[index];
+    if (!section) return;
+    renderService(
+      section.querySelector('.service-body'),
+      account.pending ? null : account,
+      !!progress[account.id],
+    );
+  });
+}
+
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
@@ -204,6 +267,48 @@ function setChecked(id, value) {
   if (el) el.checked = !!value;
 }
 
+// Home directory names of the display-name inputs currently in the DOM, in
+// order. Rebuilding them drops what the user is typing, so it only happens when
+// the account set itself changed.
+let codexNameFieldLabels = [];
+
+function codexNameFieldHtml(account, index) {
+  const label = escapeHtml(account.label);
+  return `
+    <label class="setting-field" for="codex-name-${index}">
+      <span>${label}</span>
+      <input type="text" id="codex-name-${index}" data-account-label="${label}" maxlength="40"
+             placeholder="${escapeHtml(account.defaultName || 'Codex')}" spellcheck="false" autocomplete="off">
+    </label>
+  `;
+}
+
+// One rename input per discovered Codex account. The whole group is hidden
+// while no account is known (before the first poll lands), so the panel never
+// shows an empty fieldset.
+function renderCodexNameSettings(accounts) {
+  const host = document.getElementById('codex-name-fields');
+  const group = document.getElementById('codex-name-group');
+  if (!host) return;
+  const list = (Array.isArray(accounts) ? accounts : []).filter((account) => account && account.label);
+  if (group) group.hidden = list.length === 0;
+  const labels = list.map((account) => String(account.label));
+  if (labels.length !== codexNameFieldLabels.length
+      || labels.some((label, i) => label !== codexNameFieldLabels[i])) {
+    host.innerHTML = list.map((account, index) => codexNameFieldHtml(account, index)).join('');
+    codexNameFieldLabels = labels;
+  }
+  list.forEach((account, index) => {
+    setInputValue(`codex-name-${index}`, account.customName || '');
+  });
+}
+
+async function saveCodexAccountName(label, name) {
+  if (!window.api || typeof window.api.setCodexAccountName !== 'function') return;
+  const snap = await window.api.setCodexAccountName(label, name);
+  applySnapshot(snap);
+}
+
 function renderNtfyStatus(config) {
   const el = document.getElementById('ntfy-status');
   if (!el) return;
@@ -241,6 +346,10 @@ async function saveNtfySettings(partial) {
 // doesn't, then settles. Because it observes real overflow it needs no
 // per-DPI magic numbers.
 let requestedHeight = 0;
+// True while the main process is holding the window at the display limit. The
+// content cannot fit, so `html.clamped` turns scrolling on and the loop below
+// stops asking for more height (every request would be clamped right back).
+let heightClamped = false;
 
 function syncWindowHeight() {
   if (!window.api || typeof window.api.reportContentHeight !== 'function') return;
@@ -251,6 +360,9 @@ function syncWindowHeight() {
   const content = Math.ceil(el.getBoundingClientRect().height);
   const viewport = window.innerHeight;
   const overflow = Math.max(0, document.documentElement.scrollHeight - viewport);
+  // Still overflowing at the display limit: the user scrolls instead, and we
+  // send nothing so the loop cannot spin against a window that cannot grow.
+  if (heightClamped && overflow > 0) return;
 
   let target = requestedHeight;
   if (content > requestedHeight && content > viewport) {
@@ -274,6 +386,15 @@ function syncWindowHeight() {
 function watchContentHeight() {
   const el = document.querySelector('.container');
   if (!el) return;
+  if (window.api && typeof window.api.onContentClamped === 'function') {
+    window.api.onContentClamped((clamped) => {
+      heightClamped = clamped;
+      document.documentElement.classList.toggle('clamped', clamped);
+      // The scrollbar appearing (or leaving) reflows the content, and once the
+      // clamp lifts the normal fit-to-content loop has to pick up again.
+      syncWindowHeight();
+    });
+  }
   if (typeof ResizeObserver === 'function') {
     new ResizeObserver(() => syncWindowHeight()).observe(el);
   }
@@ -285,8 +406,9 @@ function applySnapshot(payload) {
   if (!payload) return;
   applyTheme(payload.theme);
   const loginInProgress = payload.loginInProgress || {};
-  renderService('claude', payload.claude, loginInProgress.claude);
-  renderService('codex', payload.codex, loginInProgress.codex);
+  renderService(document.querySelector('[data-body="claude"]'), payload.claude, loginInProgress.claude);
+  renderCodexAccounts(payload.codexAccounts, loginInProgress.codex);
+  renderCodexNameSettings(payload.codexAccounts);
   renderFooter(payload.fetchedAt, payload.appVersion);
   if (payload.settings) {
     const sel = document.getElementById('interval-select');
@@ -331,6 +453,14 @@ async function init() {
     evt.preventDefault();
   });
 
+  // The rename inputs are rebuilt whenever the account set changes, so the
+  // handler lives on the stable wrapper instead of the inputs.
+  document.getElementById('codex-name-fields').addEventListener('change', (evt) => {
+    const input = evt.target.closest('input[data-account-label]');
+    if (!input) return;
+    void saveCodexAccountName(input.getAttribute('data-account-label') || '', input.value);
+  });
+
   document.getElementById('ntfy-topic-url').addEventListener('change', (evt) => {
     void saveNtfySettings({ topicUrl: evt.target.value });
   });
@@ -347,11 +477,19 @@ async function init() {
     void saveNtfySettings({ notifyWeekly: evt.target.checked });
   });
 
-  document.querySelectorAll('[data-login]').forEach((btn) => {
+  document.querySelectorAll('[data-login="claude"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const target = btn.getAttribute('data-login');
-      window.api.openLogin(target);
+      window.api.openLogin('claude');
     });
+  });
+
+  // The Codex sections are rebuilt whenever the account set changes, so the
+  // 🔑 handler lives on the stable wrapper instead of the buttons.
+  document.getElementById('codex-services').addEventListener('click', (evt) => {
+    const btn = evt.target.closest('[data-login="codex"]');
+    if (!btn) return;
+    const accountId = btn.getAttribute('data-account-id') || '';
+    window.api.openLogin('codex', accountId || undefined);
   });
 
   document.getElementById('quit-btn').addEventListener('click', () => {

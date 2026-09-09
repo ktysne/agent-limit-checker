@@ -10,6 +10,9 @@ const settingsStore = require('./src/settings');
 const autoLaunch = require('./src/autoLaunch');
 const claudeProvider = require('./src/claudeProvider');
 const codexProvider = require('./src/codexProvider');
+const {
+  discoverCodexHomes, defaultCodexHome, accountDisplayName, normalizeHomePath,
+} = require('./src/codexHomes');
 const { NtfyResetNotifier } = require('./src/ntfyNotifier');
 const { buildTrayImage } = require('./src/trayIcon');
 const { resolveClaudeExecutable, resolveCodexExecutable } = require('./src/cliPaths');
@@ -40,15 +43,18 @@ const POPOVER_DEFAULT_HEIGHT = 560;
 // Clamp the renderer-reported height so a measurement glitch can never blow the
 // window up or collapse it to nothing.
 const POPOVER_MIN_HEIGHT = 200;
-const POPOVER_MAX_HEIGHT = 900;
+const POPOVER_HARD_MAX_HEIGHT = 900;
+// Total vertical margin the popover leaves inside the work area: 4px at the top
+// and 4px at the bottom, the same gaps positionWindowNearTray() clamps to.
+const POPOVER_EDGE_MARGIN = 8;
 
-// Where each CLI persists its OAuth credentials. After an interactive
+// Where the Claude CLI persists its OAuth credentials. After an interactive
 // `login`, the CLI rewrites the file below — we watch it so we can refresh
 // (and surface) the restored state without the user reopening the app or
-// pressing the reload button.
+// pressing the reload button. Codex has one such file per account, so its path
+// comes from the account being logged in (Account.authFile) instead.
 const CREDENTIAL_FILES = {
   claude: path.join(os.homedir(), '.claude', '.credentials.json'),
-  codex: codexProvider.authFilePath(),
 };
 const LOGIN_WATCH_INTERVAL_MS = 1_500;
 const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
@@ -75,21 +81,30 @@ let popoverWindow = null;
 // Current popover content height (CSS px). Starts at the first-paint default
 // and tracks whatever the renderer last measured.
 let popoverHeight = POPOVER_DEFAULT_HEIGHT;
+// True while the content is taller than the window we can give it. Mirrored to
+// the renderer (see setContentClamped) and reset whenever the document is
+// reloaded, because a fresh document starts unclamped.
+let contentClamped = false;
 let pollTimer = null;
 let isPolling = false;
 let fadeTimer = null;
 let ntfyResetNotifier = null;
-// target -> { timer, deadline } while we wait for an interactive login to land.
-const loginWatchers = { claude: null, codex: null };
+// Watcher key -> { timer, deadline } while we wait for an interactive login to
+// land. The key is 'claude' or `codex:<account id>`, so two Codex accounts can
+// be logging in at the same time without one cancelling the other.
+const loginWatchers = new Map();
 // Set true by the polling loop when it sees a persistent Claude auth error;
 // consumed (and the browser login started) only when the user opens the popover.
 let claudeReauthPending = false;
 let lastAutoLoginAt = 0;
 let latestSnapshot = {
   claude: null, // {ok, data?, error?}
-  codex: null,
+  codexAccounts: [], // Account + {ok, data?, error?}, one per Codex home
   fetchedAt: 0,
 };
+// Codex homes seen by the previous poll, so a home that disappeared (its
+// directory was removed) gets its app-server stopped instead of lingering.
+let knownCodexHomes = [];
 
 function currentTheme() {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
@@ -151,6 +166,7 @@ function createPopoverWindow() {
     },
   });
   popoverWindow.setMenuBarVisibility(false);
+  popoverWindow.webContents.on('did-start-loading', () => { contentClamped = false; });
   popoverWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   popoverWindow.on('blur', () => {
     if (popoverWindow && !popoverWindow.webContents.isDevToolsOpened()) {
@@ -207,11 +223,41 @@ function hidePopover() {
   });
 }
 
+// The display the tray icon lives on, or null when it cannot be determined.
+function trayDisplay() {
+  try {
+    if (tray) {
+      const b = tray.getBounds();
+      return screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+    }
+    return screen.getPrimaryDisplay();
+  } catch {
+    return null;
+  }
+}
+
+// Ceiling for the popover height. A fixed 900px does not fit every screen — a
+// 1080p display at 150% scaling leaves a work area of about 690px — so the
+// ceiling follows the display the popover is anchored to and the window can
+// never run off it. Falls back to the hard ceiling when the display is unknown.
+function popoverMaxHeight() {
+  const display = trayDisplay();
+  const available = display && display.workArea ? display.workArea.height : NaN;
+  if (!Number.isFinite(available)) return POPOVER_HARD_MAX_HEIGHT;
+  return Math.max(
+    POPOVER_MIN_HEIGHT,
+    Math.min(POPOVER_HARD_MAX_HEIGHT, available - POPOVER_EDGE_MARGIN),
+  );
+}
+
 function positionWindowNearTray() {
   if (!popoverWindow || !tray) return;
   const trayBounds = tray.getBounds();
   const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   const workArea = display.workArea;
+  // The height may have been measured while the tray sat on a taller display,
+  // so re-clamp before anchoring: the window must fit the work area it lands on.
+  popoverHeight = Math.min(popoverHeight, popoverMaxHeight());
   let x = Math.round(trayBounds.x + trayBounds.width / 2 - POPOVER_WIDTH / 2);
   let y = Math.round(trayBounds.y - popoverHeight - 8);
   if (y < workArea.y) {
@@ -226,12 +272,25 @@ function positionWindowNearTray() {
   popoverWindow.setContentSize(POPOVER_WIDTH, popoverHeight);
 }
 
+// Tell the renderer whether its requested height was cut down to the display.
+// The renderer hides overflow by default, so this is the only signal that lets
+// it show a scrollbar — and stop asking for a height it can never get.
+function setContentClamped(clamped) {
+  if (clamped === contentClamped) return;
+  contentClamped = clamped;
+  if (popoverWindow && !popoverWindow.isDestroyed()) {
+    popoverWindow.webContents.send('content-clamped', clamped);
+  }
+}
+
 // The renderer measured its content box and told us how tall it is. Resize the
 // window to match so it fits exactly — no scrollbar, no leftover padding.
 function applyContentHeight(rawHeight) {
   const h = Math.round(Number(rawHeight));
   if (!Number.isFinite(h)) return;
-  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(POPOVER_MAX_HEIGHT, h));
+  const max = popoverMaxHeight();
+  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(max, h));
+  setContentClamped(h > max);
   if (clamped === popoverHeight) return; // no change → nothing to do
   popoverHeight = clamped;
   logger.info('[popover] fit to content height', clamped);
@@ -293,6 +352,7 @@ function errorSummary(error) {
   if (code === 'claude_rate_limited') return 'rate limited';
   if (code === 'codex_cli_missing') return 'CLI missing';
   if (code === 'codex_rpc_error') return 'login required';
+  if (code === 'codex_home_missing') return 'login required';
   if (code === 'codex_timeout' || code === 'claude_timeout') return 'timeout';
   if (code === 'claude_network') return 'network error';
   return 'error';
@@ -304,48 +364,118 @@ function serviceStatusLabel(name, svc) {
   return `${name}: ${percentLabel(utilizationFromSnapshot(svc))}`;
 }
 
-function currentTrayScaleFactor() {
-  try {
-    if (tray) {
-      const b = tray.getBounds();
-      const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
-      return display.scaleFactor || 1;
-    }
-    return screen.getPrimaryDisplay().scaleFactor || 1;
-  } catch {
-    return 1;
+function codexAccounts() {
+  return Array.isArray(latestSnapshot.codexAccounts) ? latestSnapshot.codexAccounts : [];
+}
+
+// Attach the name every surface should show for an account. The tray, the
+// popover and the ntfy notifier all read `displayName` instead of resolving the
+// name again, so a rename reaches them from one place. `customName` is the raw
+// setting (null when the account uses its default name), which the settings
+// panel needs to leave its input empty rather than pre-filling the default.
+//
+// Invariant: latestSnapshot.codexAccounts is always decorated — refreshNow and
+// every settings change run the list through here.
+function decorateCodexAccounts(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  const names = getSettings().codexAccountNames || {};
+  return list.map((account) => {
+    const custom = Object.hasOwn(names, account.label) && typeof names[account.label] === 'string'
+      ? names[account.label]
+      : null;
+    return {
+      ...account,
+      displayName: accountDisplayName(account, list, names),
+      customName: custom || null,
+      // The name the account would carry with no override. The settings panel
+      // shows it as the input placeholder; resolving it here keeps the naming
+      // rule in codexHomes.js alone.
+      defaultName: accountDisplayName(account, list, null),
+    };
+  });
+}
+
+function redecorateCodexAccounts() {
+  latestSnapshot = {
+    ...latestSnapshot,
+    codexAccounts: decorateCodexAccounts(latestSnapshot.codexAccounts),
+  };
+}
+
+// The tray has room for one Codex donut, so it shows the account closest to its
+// limit — that is the one the user needs to know about.
+function codexTrayUtilization() {
+  let worst = null;
+  for (const account of codexAccounts()) {
+    const util = utilizationFromSnapshot(account);
+    if (util == null) continue;
+    if (worst == null || util > worst) worst = util;
   }
+  return worst;
+}
+
+function codexHasError() {
+  return codexAccounts().some((account) => !account.ok);
+}
+
+function currentTrayScaleFactor() {
+  const display = trayDisplay();
+  return (display && display.scaleFactor) || 1;
 }
 
 function updateTray() {
   if (!tray) return;
   const c = utilizationFromSnapshot(latestSnapshot.claude);
-  const x = utilizationFromSnapshot(latestSnapshot.codex);
+  const x = codexTrayUtilization();
   try {
     tray.setImage(buildTrayImage(c, x, {
       scaleFactor: currentTrayScaleFactor(),
       claudeError: !!(latestSnapshot.claude && !latestSnapshot.claude.ok),
-      codexError: !!(latestSnapshot.codex && !latestSnapshot.codex.ok),
+      codexError: codexHasError(),
     }));
   } catch (err) {
     logger.error('[tray] setImage failed', err);
   }
+  const accounts = codexAccounts();
   const tooltipLines = [
     'Agent Limit Checker',
     serviceStatusLabel('Claude', latestSnapshot.claude),
-    serviceStatusLabel('Codex', latestSnapshot.codex),
   ];
+  if (accounts.length === 0) {
+    tooltipLines.push(serviceStatusLabel('Codex', null));
+  } else {
+    for (const account of accounts) {
+      tooltipLines.push(serviceStatusLabel(account.displayName, account));
+    }
+  }
   tray.setToolTip(tooltipLines.join('\n'));
   rebuildTrayMenu();
 }
 
+// `<name> 5h:` padded to a common width so the percentages line up under each
+// other in the menu.
+function usageMenuItem(name, svc) {
+  const value = svc && !svc.ok ? errorSummary(svc.error) : percentLabel(utilizationFromSnapshot(svc));
+  return { label: `${`${name} 5h:`.padEnd(11)}${value}`, enabled: false };
+}
+
 function rebuildTrayMenu() {
   if (!tray) return;
-  const c = utilizationFromSnapshot(latestSnapshot.claude);
-  const x = utilizationFromSnapshot(latestSnapshot.codex);
+  const accounts = codexAccounts();
+  const codexUsageItems = accounts.length === 0
+    ? [usageMenuItem('Codex', null)]
+    : accounts.map((account) => usageMenuItem(account.displayName, account));
+  const codexLoginItems = accounts.length === 0
+    ? [{ label: 'codex login (新しいターミナルで実行)', click: () => openLoginTerminal('codex') }]
+    : accounts.map((account) => ({
+      label: accounts.length > 1
+        ? `codex login ${account.displayName} (新しいターミナルで実行)`
+        : 'codex login (新しいターミナルで実行)',
+      click: () => openLoginTerminal('codex', account.id),
+    }));
   const menu = Menu.buildFromTemplate([
-    { label: `Claude 5h: ${latestSnapshot.claude && !latestSnapshot.claude.ok ? errorSummary(latestSnapshot.claude.error) : percentLabel(c)}`, enabled: false },
-    { label: `Codex 5h:  ${latestSnapshot.codex && !latestSnapshot.codex.ok ? errorSummary(latestSnapshot.codex.error) : percentLabel(x)}`, enabled: false },
+    usageMenuItem('Claude', latestSnapshot.claude),
+    ...codexUsageItems,
     { type: 'separator' },
     { label: '詳細を表示', click: () => togglePopover() },
     { label: '今すぐ更新', click: () => { void refreshNow(); } },
@@ -354,10 +484,7 @@ function rebuildTrayMenu() {
       label: 'claude login (新しいターミナルで実行)',
       click: () => openLoginTerminal('claude'),
     },
-    {
-      label: 'codex login (新しいターミナルで実行)',
-      click: () => openLoginTerminal('codex'),
-    },
+    ...codexLoginItems,
     { type: 'separator' },
     {
       label: 'ログイン時に自動起動',
@@ -400,7 +527,36 @@ function loginArgsFor(target) {
   return target === 'claude' ? ['auth', 'login'] : ['login'];
 }
 
-function openLoginTerminal(target) {
+// An Account-shaped record for a home we have not discovered (yet). Used both
+// for the "no Codex home at all" snapshot entry and as the login fallback, so
+// pressing 🔑 before any home exists still logs into `~/.codex`.
+function fallbackCodexAccount() {
+  const home = defaultCodexHome();
+  return {
+    id: normalizeHomePath(home),
+    label: path.basename(home),
+    home,
+    authFile: path.join(home, 'auth.json'),
+    isDefault: true,
+  };
+}
+
+// Resolve the account a login request refers to. The id comes from the
+// renderer, so it is only ever matched against the accounts we discovered
+// ourselves — never used as a path — and anything unrecognized falls back to
+// the default home.
+function resolveCodexLoginAccount(accountId) {
+  const accounts = codexAccounts();
+  if (typeof accountId === 'string' && accountId) {
+    const found = accounts.find((account) => account.id === accountId);
+    if (found) return found;
+    logger.warn('[login] unknown codex account id; using the default home');
+  }
+  const fallback = fallbackCodexAccount();
+  return accounts.find((account) => account.id === fallback.id) || fallback;
+}
+
+function openLoginTerminal(target, accountId) {
   // Spawn a new console window that runs the OAuth flow interactively.
   const exe = target === 'claude' ? resolveClaudeExecutable() : resolveCodexExecutable();
   if (!exe) {
@@ -412,13 +568,20 @@ function openLoginTerminal(target) {
     return false;
   }
   const cliArgs = loginArgsFor(target);
+  // Codex writes the credentials into $CODEX_HOME, so the login has to run
+  // against the home of the account the user asked for.
+  const account = target === 'codex' ? resolveCodexLoginAccount(accountId) : null;
   try {
     if (process.platform === 'win32') {
       // One unified path for .exe / .ps1 / .cmd / .bat: PowerShell's call
       // operator `& 'path' args` launches all of them, and single-quoted
       // strings are literal so a path that contains spaces or quotes can
       // never be mis-parsed as a command name (the old `cmd /k` failure).
-      const psCommand = buildLoginPsCommand(exe, cliArgs);
+      const psCommand = buildLoginPsCommand(
+        exe,
+        cliArgs,
+        account ? { env: { CODEX_HOME: account.home } } : undefined,
+      );
       spawn(
         'cmd.exe',
         [
@@ -430,11 +593,15 @@ function openLoginTerminal(target) {
         { detached: true, stdio: 'ignore', windowsHide: false },
       ).unref();
     } else {
-      spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
+      spawn(exe, cliArgs, {
+        detached: true,
+        stdio: 'ignore',
+        env: account ? { ...process.env, CODEX_HOME: account.home } : process.env,
+      }).unref();
     }
     // Watch the credential file so the app recovers on its own once the
     // login lands — no reopen, no manual reload.
-    watchForLoginCompletion(target);
+    watchForLoginCompletion(target, account);
     return true;
   } catch (err) {
     logger.error('[login] failed to spawn', err);
@@ -471,7 +638,7 @@ function openLoginSilent(target) {
     } else {
       spawn(exe, cliArgs, { detached: true, stdio: 'ignore' }).unref();
     }
-    watchForLoginCompletion(target);
+    watchForLoginCompletion(target, target === 'codex' ? resolveCodexLoginAccount() : null);
     logger.info('[login] silent login started', target);
     return true;
   } catch (err) {
@@ -485,7 +652,7 @@ function openLoginSilent(target) {
 // user opens the popover — the consent moment for opening the browser.
 function maybeStartPendingReauth() {
   if (!claudeReauthPending) return;
-  if (loginWatchers.claude) return;
+  if (loginWatchers.has('claude')) return;
   if (Date.now() - lastAutoLoginAt <= AUTO_LOGIN_COOLDOWN_MS) return;
   lastAutoLoginAt = Date.now();
   openLoginSilent('claude');
@@ -500,45 +667,54 @@ async function fileSignature(filePath) {
   }
 }
 
-function stopLoginWatcher(target) {
-  const w = loginWatchers[target];
+function stopLoginWatcher(key) {
+  const w = loginWatchers.get(key);
   if (w && w.timer) clearTimeout(w.timer);
-  loginWatchers[target] = null;
+  loginWatchers.delete(key);
+}
+
+// One watcher per login target. Codex is keyed by account so two accounts can
+// be logged into at the same time; a second click on the same account restarts
+// that account's watcher only.
+function loginWatcherKey(target, account) {
+  return target === 'codex' ? `codex:${account.id}` : target;
 }
 
 // Poll the target's credential file until it changes (login wrote new
 // tokens), then auto-refresh and surface the popover. Gives up after a few
 // minutes so an abandoned login doesn't leave a timer running forever.
-async function watchForLoginCompletion(target) {
-  const file = CREDENTIAL_FILES[target];
+async function watchForLoginCompletion(target, account) {
+  const file = target === 'codex' ? (account && account.authFile) : CREDENTIAL_FILES[target];
   if (!file) return;
-  stopLoginWatcher(target); // a fresh click restarts the window
+  const key = loginWatcherKey(target, account);
+  stopLoginWatcher(key); // a fresh click restarts the window
   const baseline = await fileSignature(file);
   const deadline = Date.now() + LOGIN_WATCH_TIMEOUT_MS;
   // `self` lets a tick tell whether it has been superseded by a later click
   // (or cancelled on quit) across its own `await`s.
   const self = { timer: null, deadline };
-  loginWatchers[target] = self;
+  loginWatchers.set(key, self);
 
   const tick = async () => {
-    if (loginWatchers[target] !== self) return; // superseded / cancelled
+    if (loginWatchers.get(key) !== self) return; // superseded / cancelled
     const sig = await fileSignature(file);
-    if (loginWatchers[target] !== self) return; // re-check after the await
+    if (loginWatchers.get(key) !== self) return; // re-check after the await
     if (sig != null && sig !== baseline) {
-      stopLoginWatcher(target);
-      logger.info('[login] credentials updated — auto-refreshing', target);
+      stopLoginWatcher(key);
+      logger.info('[login] credentials updated — auto-refreshing', key);
       if (target === 'codex') {
-        // The long-lived `codex app-server` cached the logged-out state;
-        // drop it so the next fetch respawns with the new credentials.
-        try { codexProvider.shutdown(); } catch { /* ignore */ }
+        // The long-lived `codex app-server` for this account cached the
+        // logged-out state; drop it so the next fetch respawns with the new
+        // credentials. Other accounts' servers stay up.
+        try { codexProvider.shutdown(account.home); } catch { /* ignore */ }
       }
       await refreshNow();
       showPopover();
       return;
     }
     if (Date.now() >= deadline) {
-      stopLoginWatcher(target);
-      logger.info('[login] watch timed out', target);
+      stopLoginWatcher(key);
+      logger.info('[login] watch timed out', key);
       return;
     }
     self.timer = setTimeout(tick, LOGIN_WATCH_INTERVAL_MS);
@@ -547,17 +723,27 @@ async function watchForLoginCompletion(target) {
   self.timer = setTimeout(tick, LOGIN_WATCH_INTERVAL_MS);
 }
 
+// Which logins the renderer should show as in progress. Codex is a map keyed
+// by account id, because each account has its own 🔑 button.
+function loginInProgressForRenderer() {
+  const codex = {};
+  for (const key of loginWatchers.keys()) {
+    if (key.startsWith('codex:')) codex[key.slice('codex:'.length)] = true;
+  }
+  return { claude: loginWatchers.has('claude'), codex };
+}
+
 function buildSnapshotForRenderer() {
   return {
     claude: latestSnapshot.claude,
-    codex: latestSnapshot.codex,
+    codexAccounts: latestSnapshot.codexAccounts,
     fetchedAt: latestSnapshot.fetchedAt,
     settings: getSettings(),
     autoLaunchEnabled: autoLaunch.isEnabled(),
     isPolling,
     theme: currentTheme(),
     appVersion: app.getVersion(),
-    loginInProgress: { claude: !!loginWatchers.claude, codex: !!loginWatchers.codex },
+    loginInProgress: loginInProgressForRenderer(),
   };
 }
 
@@ -567,19 +753,47 @@ function sendSnapshotToRenderer() {
   }
 }
 
+// The account list shown when no Codex home exists at all. Keeping one entry
+// means the popover always has a Codex section with a 🔑 button, so the user can
+// create `~/.codex` by logging in from there.
+function missingCodexHomeAccounts() {
+  return [{
+    ...fallbackCodexAccount(),
+    ok: false,
+    error: {
+      code: 'codex_home_missing',
+      message: 'Codex のホームディレクトリが見つかりません (~/.codex*)',
+      retryAfter: null,
+    },
+  }];
+}
+
 async function refreshNow() {
   if (isPolling) return;
   isPolling = true;
   sendSnapshotToRenderer();
 
-  const [claudeRes, codexRes] = await Promise.allSettled([
+  // Rediscovered every poll: a `codex login` can create a home, and a removed
+  // directory must drop out of the list.
+  const accounts = discoverCodexHomes();
+  const [claudeRes, ...codexResults] = await Promise.allSettled([
     claudeProvider.fetch(),
-    codexProvider.fetch(),
+    ...accounts.map((account) => codexProvider.fetch(account.home)),
   ]);
+
+  const homes = accounts.map((account) => account.home);
+  for (const home of knownCodexHomes) {
+    if (homes.includes(home)) continue;
+    // The home is gone; stop the app-server that was still bound to it.
+    try { void codexProvider.shutdown(home); } catch { /* ignore */ }
+  }
+  knownCodexHomes = homes;
 
   latestSnapshot = {
     claude: settled(claudeRes),
-    codex: settled(codexRes),
+    codexAccounts: decorateCodexAccounts(accounts.length > 0
+      ? accounts.map((account, index) => ({ ...account, ...settled(codexResults[index]) }))
+      : missingCodexHomeAccounts()),
     fetchedAt: Date.now(),
   };
   // Record (don't act on) a persistent Claude auth error. The browser-opening
@@ -622,9 +836,8 @@ function restartPolling() {
 function quitApp() {
   if (pollTimer) clearInterval(pollTimer);
   if (ntfyResetNotifier) ntfyResetNotifier.dispose();
-  stopLoginWatcher('claude');
-  stopLoginWatcher('codex');
-  try { codexProvider.shutdown(); } catch { /* ignore */ }
+  for (const key of [...loginWatchers.keys()]) stopLoginWatcher(key);
+  try { void codexProvider.shutdown(); } catch { /* ignore */ }
   try { claudeProvider.shutdown(); } catch { /* ignore */ }
   if (tray) {
     tray.destroy();
@@ -655,8 +868,28 @@ ipcMain.handle('set-ntfy-settings', (_evt, partial) => {
   updateNtfyNotifications();
   return buildSnapshotForRenderer();
 });
-ipcMain.handle('open-login', (_evt, target) => {
-  return openLoginTerminal(target === 'codex' ? 'codex' : 'claude');
+// Rename one Codex account. `label` comes from the renderer, so it is only
+// accepted when it matches a home we discovered ourselves — it is a settings key
+// here, never a path. An empty name clears the override and restores the
+// default name.
+ipcMain.handle('set-codex-account-name', (_evt, label, name) => {
+  const known = codexAccounts().some((account) => account.label === label);
+  if (!known) {
+    logger.warn('[settings] unknown codex account label; rename ignored');
+    return buildSnapshotForRenderer();
+  }
+  saveSettings({ codexAccountNames: { [label]: typeof name === 'string' ? name : '' } });
+  redecorateCodexAccounts();
+  updateNtfyNotifications();
+  updateTray();
+  sendSnapshotToRenderer();
+  return buildSnapshotForRenderer();
+});
+ipcMain.handle('open-login', (_evt, target, accountId) => {
+  return openLoginTerminal(
+    target === 'codex' ? 'codex' : 'claude',
+    typeof accountId === 'string' ? accountId : undefined,
+  );
 });
 ipcMain.handle('quit', () => { quitApp(); });
 ipcMain.on('content-height', (_evt, height) => applyContentHeight(height));
@@ -706,5 +939,5 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   if (ntfyResetNotifier) ntfyResetNotifier.dispose();
-  try { codexProvider.shutdown(); } catch { /* ignore */ }
+  try { void codexProvider.shutdown(); } catch { /* ignore */ }
 });

@@ -29,18 +29,8 @@
       </div>
     </section>
 
-    <section class="service" id="service-codex">
-      <div class="service-head">
-        <div class="service-title">
-          <span class="brand-dot brand-codex"></span>
-          <h2>Codex</h2>
-        </div>
-        <button class="icon-btn" data-login="codex" title="codex login を実行">🔑</button>
-      </div>
-      <div class="service-body" data-body="codex">
-        <div class="loading">取得中…</div>
-      </div>
-    </section>
+    <!-- One .service section per Codex account, built by renderCodexAccounts. -->
+    <div id="codex-services"></div>
 
     <section id="settings-panel" class="settings" aria-labelledby="settings-title" hidden>
       <div class="settings-head">
@@ -62,6 +52,15 @@
           <input type="checkbox" id="auto-launch">
           <span class="slider"></span>
         </label>
+      </div>
+      <!-- One rename input per discovered Codex account, built by
+           renderCodexNameSettings. -->
+      <div id="codex-name-group" class="settings-group" hidden>
+        <fieldset>
+          <legend>Codex 表示名</legend>
+          <div id="codex-name-fields"></div>
+          <div class="setting-hint">空にすると既定の名前に戻ります。</div>
+        </fieldset>
       </div>
       <form id="ntfy-form" class="settings-group" action="#" method="post" autocomplete="off">
         <fieldset>
