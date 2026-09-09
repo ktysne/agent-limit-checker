@@ -38,6 +38,41 @@ test('buildLoginPsCommand auto-closes on success and waits (Read-Host) on failur
   assert.ok(!/}\s*;\s*else/.test(cmd));
 });
 
+test('buildLoginPsCommand sets CODEX_HOME before invoking the CLI', () => {
+  const cmd = buildLoginPsCommand('codex.exe', ['login'], {
+    env: { CODEX_HOME: 'C:/Users/me/.codex-review' },
+  });
+  assert.ok(cmd.startsWith("$env:CODEX_HOME='C:/Users/me/.codex-review'; & 'codex.exe' 'login';"));
+  assert.ok(!cmd.includes('"'), 'command must contain no double quotes');
+  assert.equal(cmd.split(/\r?\n/).length, 1);
+});
+
+test('buildLoginPsCommand escapes single quotes inside an env value', () => {
+  const cmd = buildLoginPsCommand('codex.exe', ['login'], {
+    env: { CODEX_HOME: "C:/o'brien/.codex" },
+  });
+  assert.ok(cmd.startsWith("$env:CODEX_HOME='C:/o''brien/.codex'; "));
+  assert.ok(!cmd.includes('"'), 'command must contain no double quotes');
+});
+
+test('buildLoginPsCommand emits no env prefix without env options', () => {
+  const cmd = buildLoginPsCommand('codex.exe', ['login']);
+  assert.ok(cmd.startsWith("& 'codex.exe' 'login';"));
+  assert.ok(!cmd.includes('$env:'));
+  // An empty value is not an environment override worth emitting.
+  assert.ok(!buildLoginPsCommand('codex.exe', ['login'], { env: { CODEX_HOME: '' } }).includes('$env:'));
+});
+
+test('buildLoginPsCommand drops env names that are not plain identifiers', () => {
+  // A name cannot be quoted in `$env:<name>`, so anything else would inject
+  // PowerShell syntax rather than set a variable.
+  const cmd = buildLoginPsCommand('codex.exe', ['login'], {
+    env: { "BAD; Remove-Item 'x": 'value', CODEX_HOME: 'C:/home/.codex' },
+  });
+  assert.ok(!cmd.includes('Remove-Item'));
+  assert.ok(cmd.startsWith("$env:CODEX_HOME='C:/home/.codex'; "));
+});
+
 test('buildSilentPsCommand returns only the call-operator invocation (no window handling)', () => {
   const cmd = buildSilentPsCommand('claude', ['auth', 'login']);
   assert.equal(cmd, "& 'claude' 'auth' 'login'");

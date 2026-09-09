@@ -130,7 +130,13 @@ test('parseCredits hides a negative or non-numeric balance', () => {
   );
 });
 
-test('codex auth file path honors CODEX_HOME', () => {
+test('codex auth file path follows the home it is given', () => {
+  const codexHome = path.join('tmp', 'custom-codex-home');
+  assert.equal(_private.codexAuthFile(codexHome), path.join(codexHome, 'auth.json'));
+  assert.equal(codexProvider.authFilePath(codexHome), path.join(codexHome, 'auth.json'));
+});
+
+test('codex auth file path falls back to the default home (CODEX_HOME) when none is given', () => {
   const previous = process.env.CODEX_HOME;
   const codexHome = path.join('tmp', 'custom-codex-home');
   try {

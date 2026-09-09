@@ -54,6 +54,14 @@ html, body {
   overflow: hidden;
 }
 
+/* Set by the renderer only while the main process has clamped the window to the
+   display work area: the content genuinely does not fit, so scrolling is the
+   only way to reach the rest of it. Never on in the normal fit-to-content
+   state, where the leftover would be a few px of DPI rounding. */
+html.clamped {
+  overflow-y: auto;
+}
+
 .container {
   padding: 14px 16px;
   display: flex;
@@ -110,6 +118,19 @@ html, body {
   color: var(--text);
 }
 
+/* The default-home login fallback sits between the Codex sections and the
+   settings panel, so it reads as a footer to the Codex group. */
+.codex-default-login {
+  display: flex;
+  justify-content: center;
+}
+
+/* display:flex above overrides the UA stylesheet's [hidden]{display:none},
+   so the hidden state has to be restated here. */
+.codex-default-login[hidden] {
+  display: none;
+}
+
 .service {
   background: var(--panel);
   border-radius: 6px;
@@ -133,6 +154,23 @@ html, body {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+}
+
+/* Wrapper around the per-account Codex sections. It repeats the container's
+   column gap so the sections keep the same spacing as the Claude section next
+   to them, whether there is one account or several. */
+#codex-services {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The Codex home directory name, shown only under a heading the user renamed
+   (a default heading already carries the home name, or there is only one
+   account and the name would add nothing). */
+.service-sub {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .brand-dot {
@@ -368,6 +406,14 @@ html, body {
   gap: 4px;
   color: var(--label);
   font-size: 11px;
+}
+
+/* The generated rename inputs sit inside one wrapper, so they need the same
+   spacing the fieldset gives its own children. */
+#codex-name-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .setting-field input {

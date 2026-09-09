@@ -11,6 +11,11 @@ const {
   NtfyResetNotifier,
 } = require('../src/ntfyNotifier');
 
+// Account ids are normalized absolute home paths; the tests only need them to
+// be stable and distinct.
+const CODEX_DEFAULT_ID = '/home/me/.codex';
+const CODEX_REVIEW_ID = '/home/me/.codex-review';
+
 const silentLogger = {
   info() {},
   warn() {},
@@ -27,13 +32,19 @@ function sampleSnapshot(now) {
         weeklyScoped: [{ id: null, label: 'Fable', utilization: 0.1, resetsAt: now + 6 * 86_400_000 }],
       },
     },
-    codex: {
-      ok: true,
-      data: {
-        fiveHour: { utilization: 0.3, resetsAt: now + 120_000 },
-        weekly: { utilization: 0.5, resetsAt: now + 5 * 86_400_000 },
+    codexAccounts: [
+      {
+        id: CODEX_DEFAULT_ID,
+        label: '.codex',
+        home: CODEX_DEFAULT_ID,
+        isDefault: true,
+        ok: true,
+        data: {
+          fiveHour: { utilization: 0.3, resetsAt: now + 120_000 },
+          weekly: { utilization: 0.5, resetsAt: now + 5 * 86_400_000 },
+        },
       },
-    },
+    ],
   };
 }
 
@@ -48,8 +59,62 @@ test('collectResetEvents respects five-hour and weekly opt-in settings', () => {
 
   assert.deepEqual(
     collectResetEvents(sampleSnapshot(now), settings).map((event) => event.key),
-    ['codex:weekly', 'claude:weeklyScoped:Fable', 'claude:weekly'],
+    [`codex:${CODEX_DEFAULT_ID}:weekly`, 'claude:weeklyScoped:Fable', 'claude:weekly'],
   );
+});
+
+test('collectResetEvents keeps two Codex accounts apart and labels them', () => {
+  const now = 1_800_000_000_000;
+  const snapshot = {
+    claude: null,
+    codexAccounts: [
+      {
+        id: CODEX_DEFAULT_ID,
+        label: '.codex',
+        isDefault: true,
+        ok: true,
+        data: { fiveHour: { utilization: 0.3, resetsAt: now + 60_000 } },
+      },
+      {
+        id: CODEX_REVIEW_ID,
+        label: '.codex-review',
+        isDefault: false,
+        ok: true,
+        data: { fiveHour: { utilization: 0.1, resetsAt: now + 120_000 } },
+      },
+    ],
+  };
+
+  const events = collectResetEvents(snapshot, { ntfy: { notifyFiveHour: true } });
+  assert.deepEqual(events.map((event) => event.key), [
+    `codex:${CODEX_DEFAULT_ID}:fiveHour`,
+    `codex:${CODEX_REVIEW_ID}:fiveHour`,
+  ]);
+  assert.deepEqual(events.map((event) => event.serviceLabel), [
+    'Codex (.codex)',
+    'Codex (.codex-review)',
+  ]);
+});
+
+test('collectResetEvents keeps the plain "Codex" label for a single account', () => {
+  const now = 1_800_000_000_000;
+  const events = collectResetEvents(sampleSnapshot(now), { ntfy: { notifyFiveHour: true } });
+  const codex = events.find((event) => event.serviceId.startsWith('codex:'));
+
+  assert.equal(codex.serviceLabel, 'Codex');
+  assert.match(buildResetMessage(codex).message, /^Codex の5時間リセット時刻です。/);
+});
+
+test('collectResetEvents labels an account by the display name the snapshot carries', () => {
+  const now = 1_800_000_000_000;
+  const snapshot = sampleSnapshot(now);
+  snapshot.codexAccounts[0].displayName = 'Codex Sub';
+
+  const events = collectResetEvents(snapshot, { ntfy: { notifyFiveHour: true } });
+  const codex = events.find((event) => event.serviceId.startsWith('codex:'));
+
+  assert.equal(codex.serviceLabel, 'Codex Sub');
+  assert.match(buildResetMessage(codex).message, /^Codex Sub の5時間リセット時刻です。/);
 });
 
 test('collectResetEvents keys scoped weekly events off a stable scope id when present', () => {
@@ -179,7 +244,7 @@ test('NtfyResetNotifier sends one notification per reset timestamp', async () =>
 
   const snapshot = {
     claude: { ok: true, data: { fiveHour: { utilization: 0.2, resetsAt: now + 1000 } } },
-    codex: null,
+    codexAccounts: [],
   };
 
   notifier.update(snapshot);

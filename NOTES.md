@@ -85,7 +85,7 @@
 
 ### G. 他に未対応
 - **CLAUDE_API_KEY 経由**: macOS 版同様、本アプリも OAuth トークン経由でのみ動作。`ANTHROPIC_API_KEY` での代替ログインは未対応。
-- **multiple Codex プロファイル**: `rateLimitsByLimitId` を Sort して見る実装は入れているが、複数アカウントの選択 UI はなし。
+- **multiple Codex プロファイル**: 1 アカウント内の複数プロファイル (`rateLimitsByLimitId`) は Sort して先頭を採用するだけで、プロファイルの選択 UI はない。ホームを分けた複数アカウントは下記「Codex usage」のとおりアカウントごとに表示する。
 - **エラー観測**: `app.getPath('logs')/agent-limit-checker.log` に poll / login / tray 系エラーを書き出す最低限の logger を追加済み。
 - **テスト**: `npm test` で `node --test` を実行。Claude refresh 正規化と CLI 探索順の単体テストを追加済み。実接続は引き続き `node smoke-test.js`。
 - **i18n**: UI 文字列はすべて日本語ハードコード。
@@ -120,6 +120,12 @@
     - `style.css` の `html, body { overflow: hidden }` でスクロールバーを物理的に出さない。窓は常にコンテンツ以上のサイズに収束するので、隠れるのは収束途中のサブピクセル余白だけ (実コンテンツは欠けない)。
     - `preload.js#reportContentHeight` で `content-height` を送るのは従来通り。
 - 検証: `npx electron test/popover-fit-probe.js [scaleFactor]` が PASS。スクリーンショットと同じ最も背の高いスナップショット (Sonnet が「ウィンドウ未開始…」の長行) を実 renderer + preload に流し、`force-device-scale-factor` で **1.0 / 1.25 / 1.5 / 2.0 すべて `scrollPx=0` かつ gap≤1px に収束** することを確認。
+- 上限を超えたときの挙動 (現在の仕様):
+  - 高さの上限は `min(900, トレイのある display の workArea.height - 8)`。表示領域を読めないときだけ 900 に落とす。1080p の 150% 表示は作業領域が約 690px しかなく、900px 固定では窓が画面外にはみ出すため。
+  - 上限でクランプしたときだけ main が `content-clamped` を送り、renderer が `html.clamped` を付けて `overflow-y: auto` にする。通常時は従来どおり `overflow: hidden` のままで、分数 DPI の数 px の余りでスクロールバーは出ない。
+  - クランプ中の renderer は、はみ出していても新しい高さを要求しない。伸びない窓に要求を送り続けても収束しないため。コンテンツが上限より低くなるとクランプが解け、通常のフィットループに戻る。
+  - main は renderer が最後に報告した生の高さを保持する。表示先の作業領域が変わったとき (ポップオーバーを開くたび) はその値で再クランプし、上限が上がっていれば窓を広げてクランプを解く。クランプ中の renderer は高さを報告しないため、保持した値だけが復帰の手がかりになる。
+  - 検証は `popover-fit-probe.js` の clamped ケース (Codex 3 アカウント + 設定パネル)、および ceiling-raised ケース (クランプ後に上限を上げて再適用)。`html.clamped` が付くこと、スクロールできること、クランプ後に要求が止まること、上限が上がるとクランプが解けて窓がコンテンツ高さに収束することを 1.0 / 1.25 / 1.5 / 2.0 で確認。
 
 ## ファイル構成
 ```
@@ -131,6 +137,7 @@ agent-limit-checker/
 ├── src/
 │   ├── claudeProvider.js    # ~/.claude/.credentials.json → /api/oauth/usage
 │   ├── codexProvider.js     # spawn `codex app-server` + JSON-RPC `account/rateLimits/read`
+│   ├── codexHomes.js        # ~/.codex* の走査と Codex アカウント一覧の生成
 │   ├── settings.js          # userData/settings.json
 │   ├── autoLaunch.js        # app.setLoginItemSettings ラッパ
 │   ├── cliPaths.js          # Claude/Codex CLI の探索
@@ -194,3 +201,9 @@ agent-limit-checker/
   ```
   ⚠ `balance` は **ドルではなく Codex「クレジット」の数**を表す 10 進文字列。型 (`app-server-protocol` の `CreditsSnapshot = { hasCredits, unlimited, balance:string|null }`) に currency は無く、codex 本体の `/status` も `"<四捨五入> credits"` と表示する (`$` は付けない)。よって `src/codexProvider.js#parseCredits` は `currency:null`（＝金額ではなく計数）でマークし、`hasCredits:true` かつ残高が正のときだけ `{ amount, currency:null, unlimited:false }` を返す。UI (`formatCredit`) は `currency` が無いとき残高を**小数第3位以下で四捨五入**して 2 桁で「N.NN クレジット」と表示 (`toFixed(2)`。`115.9354… → 115.94`)。`unlimited:true` は `{ amount:null, currency:null, unlimited:true }` として区別 (UI は「無制限」)。それ以外は `null` → UI で項目非表示。`credits` ノードは `rateLimits` 優先、無ければ `rateLimitsByLimitId` をキー昇順で探索し、さらに `hasCredits:true` のノードを優先 (extractPlanLabel と同じ選択規則 + クレジット有無で優先)。
   - 対して Claude 側の `spend.balance` は `currency:"USD"` 付きの**本物の金額**なので、そちらは従来どおり通貨表示 (`$5.00`)。両者は単位が異なる。
+- **複数ホーム (複数アカウント)**: `src/codexHomes.js#discoverCodexHomes` がホームディレクトリ直下の `.codex` で始まるディレクトリを走査し、直下に `auth.json` か `config.toml` があるものだけをアカウントとして採用する。どちらも無いディレクトリは Codex のホームだと確定できず、app-server を起動しても失敗するだけなので除外する。
+- `CODEX_HOME` が設定されていればそのパスも候補に加える (ホームディレクトリ外でもよい)。走査結果と重複する場合は絶対パス (Windows では小文字化) で 1 件にまとめる。既定のホーム (`CODEX_HOME`、無ければ `~/.codex`) が一覧の先頭に来る。
+- app-server はホームごとに 1 プロセス起動し、子プロセスの `CODEX_HOME` をそのホームに固定する (`src/codexProvider.js#buildChildEnv`)。ログイン完了時に停止するのは対象ホームのプロセスだけで、他アカウントの接続は維持する。
+- 候補が 1 件も無いときは `codex_home_missing` のプレースホルダを 1 件返す。ポップオーバーに Codex セクションが必ず 1 つ出るので、🔑 から `codex login` を実行して `~/.codex` を作れる。
+- トレイのドーナツは 1 個なので、5 時間枠の利用率が最も高いアカウントを表示する。ツールチップ、コンテキストメニュー、ポップオーバーはアカウントごとに 1 行 (1 セクション) を出す。1 アカウントのときの表示は従来と同じ「Codex」のまま。
+- **表示名の変更**: 設定画面の「Codex 表示名」でアカウントごとの表示名を上書きできる。設定は `settings.json` の `codexAccountNames` に `{ "<ホームディレクトリ名>": "<表示名>" }` の形で入る (例: `{ ".codex-sub": "Codex Sub" }`)。キーがパスではなくホームディレクトリ名なのは、ユーザが識別子として読めることと、ホームの移動やユーザ名変更で設定が失われないため。値は trim して 40 文字で切り詰め、空文字のエントリは保存せずに削除する (= 既定名に戻る)。上書き名は `Codex (...)` で包まず、そのまま見出し・ツールチップ・トレイメニュー・ntfy 通知文に使う。解決済みの名前は `main.js#decorateCodexAccounts` がスナップショットの各アカウントに `displayName` として付与し、renderer と ntfy はそれを読む。
