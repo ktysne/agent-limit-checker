@@ -127,9 +127,33 @@ function accountDisplayName(account, accounts, names) {
   return `Codex (${label})`;
 }
 
+// The homes a `codex login` action may target, in the order the UI should offer
+// them: every discovered account first, then `defaultAccount` appended when none
+// of them is the default home.
+//
+// The default home is appended only to the LOGIN list, never merged into the
+// account list itself: a setup that deliberately keeps `~/.codex` unused would
+// otherwise carry a permanent "home missing" entry in the usage sections. Login
+// is the one action that must stay reachable even for a home that does not exist
+// yet, because running it is what creates the home.
+//
+// The appended entry gets the default display name resolved against the whole
+// target list, so alongside other accounts it reads "Codex (.codex)" instead of
+// a bare "Codex" that no longer tells the homes apart.
+function codexLoginTargets(accounts, defaultAccount) {
+  const list = (Array.isArray(accounts) ? accounts : []).filter(Boolean);
+  if (!defaultAccount) return list;
+  if (list.some((account) => account.isDefault)) return list;
+  const targets = [...list, defaultAccount];
+  return targets.map((account) => (account === defaultAccount
+    ? { ...account, displayName: accountDisplayName(account, targets, null) }
+    : account));
+}
+
 module.exports = {
   discoverCodexHomes,
   defaultCodexHome,
   accountDisplayName,
+  codexLoginTargets,
   normalizeHomePath,
 };

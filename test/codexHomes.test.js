@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
-  discoverCodexHomes, defaultCodexHome, accountDisplayName, normalizeHomePath,
+  discoverCodexHomes, defaultCodexHome, accountDisplayName, codexLoginTargets, normalizeHomePath,
 } = require('../src/codexHomes');
 
 const tempDirs = [];
@@ -142,4 +142,41 @@ test('accountDisplayName ignores an empty or non-string name', () => {
   assert.equal(accountDisplayName(one[0], one, { '.codex': '' }), 'Codex');
   assert.equal(accountDisplayName(one[0], one, { '.codex': '   ' }), 'Codex');
   assert.equal(accountDisplayName(one[0], one, { '.codex': 42 }), 'Codex');
+});
+
+const DEFAULT_TARGET = {
+  id: 'c:/users/me/.codex', label: '.codex', home: 'C:/Users/me/.codex', isDefault: true,
+};
+
+test('codexLoginTargets keeps the account list when the default home is in it', () => {
+  const accounts = [
+    { id: 'c:/users/me/.codex', label: '.codex', isDefault: true },
+    { id: 'c:/users/me/.codex-review', label: '.codex-review', isDefault: false },
+  ];
+
+  assert.deepEqual(codexLoginTargets(accounts, DEFAULT_TARGET), accounts);
+});
+
+test('codexLoginTargets appends the default home when no account is the default', () => {
+  const accounts = [{ id: 'c:/users/me/.codex-review', label: '.codex-review', isDefault: false }];
+
+  const targets = codexLoginTargets(accounts, DEFAULT_TARGET);
+
+  assert.equal(targets.length, 2);
+  assert.equal(targets[0], accounts[0]);
+  assert.equal(targets[1].id, DEFAULT_TARGET.id);
+  assert.equal(targets[1].home, DEFAULT_TARGET.home);
+  // Alongside another account a bare "Codex" would not say which home it is.
+  assert.equal(targets[1].displayName, 'Codex (.codex)');
+  // The caller's default account object must not be mutated.
+  assert.equal(DEFAULT_TARGET.displayName, undefined);
+});
+
+test('codexLoginTargets falls back to the default home alone for an empty list', () => {
+  const targets = codexLoginTargets([], DEFAULT_TARGET);
+
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].id, DEFAULT_TARGET.id);
+  assert.equal(targets[0].displayName, 'Codex');
+  assert.deepEqual(codexLoginTargets(null, DEFAULT_TARGET), targets);
 });

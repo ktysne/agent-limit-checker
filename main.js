@@ -11,7 +11,7 @@ const autoLaunch = require('./src/autoLaunch');
 const claudeProvider = require('./src/claudeProvider');
 const codexProvider = require('./src/codexProvider');
 const {
-  discoverCodexHomes, defaultCodexHome, accountDisplayName, normalizeHomePath,
+  discoverCodexHomes, defaultCodexHome, accountDisplayName, codexLoginTargets, normalizeHomePath,
 } = require('./src/codexHomes');
 const { NtfyResetNotifier } = require('./src/ntfyNotifier');
 const { buildTrayImage } = require('./src/trayIcon');
@@ -81,6 +81,11 @@ let popoverWindow = null;
 // Current popover content height (CSS px). Starts at the first-paint default
 // and tracks whatever the renderer last measured.
 let popoverHeight = POPOVER_DEFAULT_HEIGHT;
+// The last raw (unclamped) content height the renderer reported. Kept so the
+// window can be re-derived against a ceiling that changed after the report —
+// the renderer stops reporting while clamped, so this is the only record of how
+// tall the content really is.
+let lastReportedHeight = POPOVER_DEFAULT_HEIGHT;
 // True while the content is taller than the window we can give it. Mirrored to
 // the renderer (see setContentClamped) and reset whenever the document is
 // reloaded, because a fresh document starts unclamped.
@@ -255,9 +260,11 @@ function positionWindowNearTray() {
   const trayBounds = tray.getBounds();
   const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   const workArea = display.workArea;
-  // The height may have been measured while the tray sat on a taller display,
-  // so re-clamp before anchoring: the window must fit the work area it lands on.
-  popoverHeight = Math.min(popoverHeight, popoverMaxHeight());
+  // The ceiling belongs to the display the popover lands on, which may not be
+  // the one the height was measured against, so re-derive it here: the window
+  // must fit the work area it lands on, and must grow back to the full content
+  // once it lands on a work area with room for it.
+  reapplyPopoverHeight();
   let x = Math.round(trayBounds.x + trayBounds.width / 2 - POPOVER_WIDTH / 2);
   let y = Math.round(trayBounds.y - popoverHeight - 8);
   if (y < workArea.y) {
@@ -283,17 +290,28 @@ function setContentClamped(clamped) {
   }
 }
 
+// Re-derive popoverHeight from the last reported content height against the
+// ceiling that applies right now, and mirror the resulting clamp state to the
+// renderer. Returns true when the height changed, so callers know whether the
+// window still has to be resized. Idempotent: calling it twice in a row is a
+// no-op, which is what lets positionWindowNearTray() run it on every show.
+function reapplyPopoverHeight() {
+  const max = popoverMaxHeight();
+  const next = Math.max(POPOVER_MIN_HEIGHT, Math.min(max, lastReportedHeight));
+  setContentClamped(lastReportedHeight > max);
+  if (next === popoverHeight) return false;
+  popoverHeight = next;
+  logger.info('[popover] fit to content height', next);
+  return true;
+}
+
 // The renderer measured its content box and told us how tall it is. Resize the
 // window to match so it fits exactly — no scrollbar, no leftover padding.
 function applyContentHeight(rawHeight) {
   const h = Math.round(Number(rawHeight));
   if (!Number.isFinite(h)) return;
-  const max = popoverMaxHeight();
-  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(max, h));
-  setContentClamped(h > max);
-  if (clamped === popoverHeight) return; // no change → nothing to do
-  popoverHeight = clamped;
-  logger.info('[popover] fit to content height', clamped);
+  lastReportedHeight = h;
+  if (!reapplyPopoverHeight()) return; // no change → nothing to do
   if (!popoverWindow || popoverWindow.isDestroyed()) return;
   if (popoverWindow.isVisible()) {
     // Re-anchor to the tray so the popover grows upward from it; this also
@@ -307,6 +325,9 @@ function applyContentHeight(rawHeight) {
 function showPopover() {
   const win = createPopoverWindow();
   if (win.isVisible()) {
+    // The tray may have moved to another display while the popover stayed open,
+    // so re-derive the height against the ceiling that applies now.
+    if (reapplyPopoverHeight()) positionWindowNearTray();
     // User looking at the app is the consent moment for the deferred browser
     // login; start it before the snapshot send so the renderer immediately
     // shows the in-progress state.
@@ -459,20 +480,28 @@ function usageMenuItem(name, svc) {
   return { label: `${`${name} 5h:`.padEnd(11)}${value}`, enabled: false };
 }
 
+// The menu line for one login target. The default home appended by
+// codexLoginTargets() has not been discovered, so it is labelled as creating the
+// home rather than logging into an existing one; with a single target the home
+// name carries no information and the plain wording is kept.
+function codexLoginMenuLabel(account, targets, discoveredIds) {
+  if (targets.length <= 1) return 'codex login (新しいターミナルで実行)';
+  if (!discoveredIds.has(account.id)) return `codex login ${account.label} (既定ホームを作成)`;
+  return `codex login ${account.displayName} (新しいターミナルで実行)`;
+}
+
 function rebuildTrayMenu() {
   if (!tray) return;
   const accounts = codexAccounts();
   const codexUsageItems = accounts.length === 0
     ? [usageMenuItem('Codex', null)]
     : accounts.map((account) => usageMenuItem(account.displayName, account));
-  const codexLoginItems = accounts.length === 0
-    ? [{ label: 'codex login (新しいターミナルで実行)', click: () => openLoginTerminal('codex') }]
-    : accounts.map((account) => ({
-      label: accounts.length > 1
-        ? `codex login ${account.displayName} (新しいターミナルで実行)`
-        : 'codex login (新しいターミナルで実行)',
-      click: () => openLoginTerminal('codex', account.id),
-    }));
+  const loginTargets = codexLoginTargets(accounts, fallbackCodexAccount());
+  const discoveredIds = new Set(accounts.map((account) => account.id));
+  const codexLoginItems = loginTargets.map((account) => ({
+    label: codexLoginMenuLabel(account, loginTargets, discoveredIds),
+    click: () => openLoginTerminal('codex', account.id),
+  }));
   const menu = Menu.buildFromTemplate([
     usageMenuItem('Claude', latestSnapshot.claude),
     ...codexUsageItems,
@@ -547,12 +576,16 @@ function fallbackCodexAccount() {
 // the default home.
 function resolveCodexLoginAccount(accountId) {
   const accounts = codexAccounts();
+  const fallback = fallbackCodexAccount();
   if (typeof accountId === 'string' && accountId) {
     const found = accounts.find((account) => account.id === accountId);
     if (found) return found;
-    logger.warn('[login] unknown codex account id; using the default home');
+    // The default home is a legitimate target even before it exists — logging
+    // into it is what creates it — so it is not an unknown id.
+    if (accountId !== fallback.id) {
+      logger.warn('[login] unknown codex account id; using the default home');
+    }
   }
-  const fallback = fallbackCodexAccount();
   return accounts.find((account) => account.id === fallback.id) || fallback;
 }
 
@@ -734,9 +767,14 @@ function loginInProgressForRenderer() {
 }
 
 function buildSnapshotForRenderer() {
+  const defaultAccount = fallbackCodexAccount();
   return {
     claude: latestSnapshot.claude,
     codexAccounts: latestSnapshot.codexAccounts,
+    // The default home, whether or not it was discovered. The popover offers a
+    // login into it when no discovered account is the default one, so `~/.codex`
+    // can still be created from the UI.
+    codexDefaultAccount: { id: defaultAccount.id, label: defaultAccount.label },
     fetchedAt: latestSnapshot.fetchedAt,
     settings: getSettings(),
     autoLaunchEnabled: autoLaunch.isEnabled(),

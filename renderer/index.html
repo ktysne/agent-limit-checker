@@ -32,6 +32,12 @@
     <!-- One .service section per Codex account, built by renderCodexAccounts. -->
     <div id="codex-services"></div>
 
+    <!-- Only shown while none of the discovered Codex homes is the default one,
+         so `~/.codex` can still be created from the popover. -->
+    <div id="codex-default-login" class="codex-default-login" hidden>
+      <button type="button" class="text-btn" id="codex-default-login-btn"></button>
+    </div>
+
     <section id="settings-panel" class="settings" aria-labelledby="settings-title" hidden>
       <div class="settings-head">
         <h2 id="settings-title">設定</h2>

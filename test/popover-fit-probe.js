@@ -13,6 +13,11 @@
 //                  the ceiling, so `html.clamped` turns on, the content is
 //                  scrollable, and the height requests stop instead of climbing
 //                  forever. Closing the panel again must lift the clamp.
+// Case "ceiling-raised": clamped, then the ceiling grows (the popover moved to a
+//                  taller display). Re-applying the last reported height must
+//                  lift the clamp and hand the window back to the fit loop —
+//                  the clamped renderer reports nothing, so only the retained
+//                  height can drive this.
 //
 // PROBE_DEBUG=1 prints every reported height, for diagnosing the loop.
 
@@ -73,21 +78,22 @@ let win = null;
 let snapshot = makeSnapshot(1);
 let maxHeight = POPOVER_HARD_MAX_HEIGHT;
 let popoverHeight = 560;
+// The last raw height the renderer reported, mirroring main.js: the renderer
+// goes quiet while clamped, so re-applying a changed ceiling needs this record.
+let lastReportedHeight = 560;
 let contentClamped = false;
 let reportCount = 0;
 
 ipcMain.handle('get-snapshot', () => snapshot);
 ipcMain.handle('set-ntfy-settings', () => snapshot);
 ipcMain.handle('set-codex-account-name', () => snapshot);
-// Mirror main.js applyContentHeight: clamp the reported height, tell the
-// renderer whether it was clamped, and resize.
-ipcMain.on('content-height', (_evt, h) => {
-  reportCount += 1;
-  const raw = Math.round(Number(h));
-  if (process.env.PROBE_DEBUG) console.log(`  report#${reportCount} ${raw}`);
-  if (!Number.isFinite(raw)) return;
-  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(maxHeight, raw));
-  const overCeiling = raw > maxHeight;
+
+// Mirror main.js reapplyPopoverHeight: re-derive the window height from the last
+// reported content height against the ceiling that applies now, and mirror the
+// clamp state to the renderer.
+function reapplyHeight() {
+  const clamped = Math.max(POPOVER_MIN_HEIGHT, Math.min(maxHeight, lastReportedHeight));
+  const overCeiling = lastReportedHeight > maxHeight;
   if (overCeiling !== contentClamped) {
     contentClamped = overCeiling;
     if (win && !win.isDestroyed()) win.webContents.send('content-clamped', contentClamped);
@@ -95,6 +101,16 @@ ipcMain.on('content-height', (_evt, h) => {
   if (clamped === popoverHeight) return;
   popoverHeight = clamped;
   if (win && !win.isDestroyed()) win.setContentSize(POPOVER_WIDTH, popoverHeight);
+}
+
+// Mirror main.js applyContentHeight: record the raw height, then re-apply it.
+ipcMain.on('content-height', (_evt, h) => {
+  reportCount += 1;
+  const raw = Math.round(Number(h));
+  if (process.env.PROBE_DEBUG) console.log(`  report#${reportCount} ${raw}`);
+  if (!Number.isFinite(raw)) return;
+  lastReportedHeight = raw;
+  reapplyHeight();
 });
 
 // Cases run one window at a time, so the app must survive the gap between
@@ -111,10 +127,13 @@ const measure = (w) => w.webContents.executeJavaScript(`new Promise((res) => {
   })));
 })`);
 
-async function runCase({ name, codexCount, ceiling, openSettings, closeSettingsAfter }) {
+async function runCase({
+  name, codexCount, ceiling, openSettings, closeSettingsAfter, raiseCeilingTo,
+}) {
   snapshot = makeSnapshot(codexCount);
   maxHeight = ceiling;
   popoverHeight = 560;
+  lastReportedHeight = 560;
   contentClamped = false;
   reportCount = 0;
 
@@ -154,6 +173,18 @@ async function runCase({ name, codexCount, ceiling, openSettings, closeSettingsA
     reportsAfterIdle: reportCount,
     after: null,
   };
+  if (raiseCeilingTo) {
+    // The popover moved to a display with a taller work area. main.js re-applies
+    // the retained height on the next show; do the same here.
+    maxHeight = raiseCeilingTo;
+    win.setPosition(200, 0); // an unclamped window can outgrow the probe's start y
+    reapplyHeight();
+    await wait(900);
+    const grown = await measure(win);
+    result.after = {
+      ...grown, gap: grown.innerHeight - grown.container, contentSize: win.getContentSize(),
+    };
+  }
   if (closeSettingsAfter) {
     // Shrinking back under the ceiling must lift the clamp and hand the window
     // back to the normal fit-to-content loop.
@@ -210,6 +241,20 @@ app.whenReady().then(async () => {
   pass = check('html.clamped cleared', !back.clampedClass) && pass;
   pass = check('no scrollbar again', back.scrollPx < 0.5) && pass;
   pass = check('snug fit again', back.gap >= -0.5 && back.gap <= 4) && pass;
+
+  // 4. The ceiling grows under a clamped popover (it moved to a taller display):
+  //    the retained height must be re-applied, lifting the clamp.
+  const raised = await runCase({
+    name: 'ceiling-raised', codexCount: 3, ceiling, openSettings: true, raiseCeilingTo: 10_000,
+  });
+  const grown = raised.after;
+  console.log(`\n[ceiling-raised] ceiling ${ceiling} → 10000  contentSize=${JSON.stringify(grown.contentSize)}`);
+  console.log(`[ceiling-raised] content=${grown.container.toFixed(2)} innerHeight=${grown.innerHeight} scrollPx=${grown.scrollPx.toFixed(2)} gap=${grown.gap.toFixed(2)} clampedClass=${grown.clampedClass}`);
+  pass = check('was clamped before the ceiling rose', raised.clampedClass) && pass;
+  pass = check('html.clamped cleared', !grown.clampedClass) && pass;
+  pass = check('no scrollbar after the ceiling rose', grown.scrollPx < 0.5) && pass;
+  pass = check('window grew past the old ceiling', grown.contentSize[1] > ceiling) && pass;
+  pass = check('snug fit after the ceiling rose', grown.gap >= -0.5 && grown.gap <= 4) && pass;
 
   console.log(`\n${pass ? 'PASS' : 'FAIL'}`);
   app.exit(pass ? 0 : 1);

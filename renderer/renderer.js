@@ -220,6 +220,30 @@ function renderCodexAccounts(accounts, loginInProgress) {
   });
 }
 
+// `codex login` into the default home stays reachable from the popover even when
+// only alternative homes exist: without this the 🔑 buttons all point at the
+// discovered homes and `~/.codex` could never be created from the UI. Hidden as
+// soon as the default home shows up in the account list, where it has its own
+// 🔑 button.
+function renderCodexDefaultLogin(accounts, defaultAccount) {
+  const host = document.getElementById('codex-default-login');
+  const btn = document.getElementById('codex-default-login-btn');
+  if (!host || !btn) return;
+  const list = Array.isArray(accounts) ? accounts : [];
+  const id = defaultAccount && defaultAccount.id ? String(defaultAccount.id) : '';
+  const show = list.length > 0 && !!id
+    && !list.some((account) => account && account.isDefault);
+  host.hidden = !show;
+  if (!show) {
+    btn.removeAttribute('data-account-id');
+    btn.textContent = '';
+    return;
+  }
+  btn.setAttribute('data-account-id', id);
+  // textContent, not innerHTML: the label carries a home directory name.
+  btn.textContent = `既定ホーム (${defaultAccount.label || '.codex'}) にログイン`;
+}
+
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
@@ -408,6 +432,7 @@ function applySnapshot(payload) {
   const loginInProgress = payload.loginInProgress || {};
   renderService(document.querySelector('[data-body="claude"]'), payload.claude, loginInProgress.claude);
   renderCodexAccounts(payload.codexAccounts, loginInProgress.codex);
+  renderCodexDefaultLogin(payload.codexAccounts, payload.codexDefaultAccount);
   renderCodexNameSettings(payload.codexAccounts);
   renderFooter(payload.fetchedAt, payload.appVersion);
   if (payload.settings) {
@@ -490,6 +515,12 @@ async function init() {
     if (!btn) return;
     const accountId = btn.getAttribute('data-account-id') || '';
     window.api.openLogin('codex', accountId || undefined);
+  });
+
+  document.getElementById('codex-default-login-btn').addEventListener('click', (evt) => {
+    const accountId = evt.currentTarget.getAttribute('data-account-id') || '';
+    if (!accountId) return;
+    window.api.openLogin('codex', accountId);
   });
 
   document.getElementById('quit-btn').addEventListener('click', () => {

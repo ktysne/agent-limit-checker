@@ -118,6 +118,19 @@ html.clamped {
   color: var(--text);
 }
 
+/* The default-home login fallback sits between the Codex sections and the
+   settings panel, so it reads as a footer to the Codex group. */
+.codex-default-login {
+  display: flex;
+  justify-content: center;
+}
+
+/* display:flex above overrides the UA stylesheet's [hidden]{display:none},
+   so the hidden state has to be restated here. */
+.codex-default-login[hidden] {
+  display: none;
+}
+
 .service {
   background: var(--panel);
   border-radius: 6px;
