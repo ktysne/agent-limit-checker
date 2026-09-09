@@ -98,9 +98,11 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 
 ## リモートセッション時の作業について
 
-### AIクロスレビュー（ai-cross-review）
-基本フローは **実装 → レビュー → 指摘対応 → 妥当性確認** を Claude / Codex を入れ替えて回し、受け渡しは **git 差分 / PR**（チャットログを手コピーしない）。**指摘・対応・妥当性確認は PR コメントに残す**。実行手順 (CLI / リモートコントロール時のサブエージェント経路・各フラグ) は **[cross-review スキル](.claude/skills/cross-review/SKILL.md)** に集約。
+### AI 相互レビュー（ai-cross-review）
+相互レビューの手順の正本は [docs/cross-review.md](docs/cross-review.md)（vendored）と、グローバル SKILL `~/.codex/skills/cross-review/SKILL.md`（Claude 側は `~/.claude/skills/cross-review/SKILL.md`、どちらも無い環境では vendored の [.claude/skills/cross-review/SKILL.md](.claude/skills/cross-review/SKILL.md)）である。
+このリポジトリ固有のレビュー観点は `.cross-review.md` にある。
+3 択、サーキットブレーカー、PR 運用といった汎用ルールはここに写さず、SKILL を参照する。
 
-毎回守る必須ルール:
-- **実装完了後の起点（Claude 主導・必須）**: Claude が改修を一区切りしたら、作業を完了扱いにする前に必ず **A. Codex にレビュー依頼 / B. レビュー + 修正依頼 / C. 何もしない** の 3 択を `AskUserQuestion` で提示する。「コミットして終わり」「PR を作って終わり」と勝手に締めない。反復改修でも論理的な区切りごとに確認する。省略してよい軽微な例外（誤字・ドキュメント文言調整・整形のみ等。省略時は一言添える）はスキル参照。**規模・影響で迷ったら省略せず確認する**。
-- **サーキットブレーカー（無限ループ防止・必須）**: レビュー ↔ 指摘対応は **最大 3 往復**（1 往復 = 実装 or 指摘対応 → レビュー → Claude が結果確認。カウント対象は blocker / 要修正）。超過 or 同一指摘の揺り戻しを検知したら中断し、サマリを `AskUserQuestion` で提示する。
+- 検証コマンド: `npm test`（node --test）。Electron の実行を伴う確認は `npx electron test/<name>.js`、配布物の確認は `npm run build`。
+- 基盤の更新: `npm run sync`（検査は `npm run sync:check`、未登録の配布物は `node tools/cross-review.sync.js --check-manifest`）で上流から取り込む。更新手順は「同期 → 表示された移行ノートの作業 → 上の検証コマンド」の順。
+- レビューの起点: 既定のレビュアーは実装者と別のベンダーで、実装を一区切りしたら 3 択を提示する（Codex 主導では選択 UI が無ければ本文に 3 択を明記して返信を待つ。詳細は SKILL）。指摘、対応、妥当性確認は PR コメントに残し、本文は `.cross-review/round-<N>-triage.md` を書いて `node tools/cross-review.js comment --round <N>` で生成する。

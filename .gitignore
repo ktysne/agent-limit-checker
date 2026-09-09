@@ -7,3 +7,6 @@ _reference/
 # .claude/ はローカル設定 (settings.local.json 等) を除外しつつ cross-review スキルだけ追跡する
 .claude/*
 !.claude/skills/
+# ai-cross-review のローカル状態と生成物 (往復回数、レビュー出力、PR コメント本文)
+.cross-review-state.json
+.cross-review/
