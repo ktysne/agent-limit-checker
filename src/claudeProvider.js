@@ -6,8 +6,17 @@ const os = require('node:os');
 const https = require('node:https');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const REQUEST_TIMEOUT_MS = 12_000;
+
+// Claude Code CLI は CLAUDE_CONFIG_DIR が設定されていればそこを設定ディレクトリ
+// として使う。credentials は CLI と共有するので、同じ規則で解決する。
+// 呼び出しのたびに解決する (モジュール読み込み時に固定しない) ので、環境変数を
+// 差し替えれば参照先も切り替わる。
+function credentialsPath() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  const base = configDir && configDir.trim() ? configDir.trim() : path.join(os.homedir(), '.claude');
+  return path.join(base, '.credentials.json');
+}
 
 // Claude Code CLI 自身が OAuth refresh に使う endpoint / client_id。公開仕様では
 // なく CLI に埋め込まれた値なので、上流の更新で変わりうる。値が無効になると
@@ -19,7 +28,7 @@ const DEFAULT_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 async function readCredentials() {
   let raw;
   try {
-    raw = await fs.readFile(CREDENTIALS_PATH, 'utf8');
+    raw = await fs.readFile(credentialsPath(), 'utf8');
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       throw makeError(
@@ -53,10 +62,18 @@ function makeError(code, message, extra) {
   return err;
 }
 
+// HTTP の実体は差し替え可能にしておく。テストが token endpoint と usage API を
+// モックするための唯一の注入点で、既定は node:https の request。
+let transport = https.request;
+
+function setTransport(fn) {
+  transport = fn || https.request;
+}
+
 function httpJson(url, options) {
   return new Promise((resolve, reject) => {
     const body = options.body || null;
-    const req = https.request(
+    const req = transport(
       url,
       {
         method: options.method || 'GET',
@@ -84,9 +101,12 @@ function httpJson(url, options) {
             return;
           }
           if (res.statusCode === 401) {
+            // body を残すのは、token endpoint の 401 で OAuth の `error` を
+            // 再ログイン案内の補足に回すため (describeRefreshFailure)。
             reject(makeError(
               'claude_unauthorized',
               'Anthropic から認証エラー (401)。`claude login` で再ログインしてください。',
+              { status: res.statusCode, body: body.slice(0, 500) },
             ));
             return;
           }
@@ -337,20 +357,45 @@ function mergeRefreshResponse(existingOauth, json, now = Date.now()) {
   };
 }
 
-async function writeCredentials(rawCredentials, oauth) {
-  const next = {
-    ...rawCredentials,
-    claudeAiOauth: oauth,
-  };
-  const dir = path.dirname(CREDENTIALS_PATH);
+async function writeCredentialsFile(next) {
+  const target = credentialsPath();
+  const dir = path.dirname(target);
   const tmp = path.join(dir, `.credentials.${process.pid}.${Date.now()}.tmp`);
   await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  await fs.rename(tmp, CREDENTIALS_PATH);
+  await fs.rename(tmp, target);
+}
+
+// refresh 結果を compare-and-swap で書き戻し、採用した credentials を返す。
+// 不変条件: 書き込み直前に読み直した `claudeAiOauth.accessToken` が POST 前の値
+// と一致するときだけ書く。POST の最中に CLI が credentials.json を更新していた
+// 場合、古い土台でファイル全体を置換すると CLI が書いた token や未知フィールドを
+// 壊すため、こちらの refresh 結果は捨ててファイルの内容を採用する (refresh token
+// は回転するので、後から書かれたほうが有効な token を持つ)。
+// 書くときの土台も読み直した最新の raw にして、`claudeAiOauth` 以外の未知
+// フィールドを最新の状態から引き継ぐ。
+// 読み直せない (ファイルが無い / JSON が壊れている) 場合は復旧を優先し、自分の
+// 結果を書く。
+async function writeCredentials(fallbackRaw, oauth, previousAccessToken) {
+  let latest = null;
+  try {
+    latest = await readCredentials();
+  } catch {
+    latest = null;
+  }
+  if (latest && latest.accessToken !== previousAccessToken) return latest;
+
+  const next = {
+    ...(latest ? latest.raw : fallbackRaw),
+    claudeAiOauth: oauth,
+  };
+  await writeCredentialsFile(next);
+  return { raw: next, oauth, accessToken: oauth.accessToken };
 }
 
 // access token を直接 refresh する。成功したら credentials.json を書き換え、
-// 更新後の credentials を返す。他プロセス (CLI) が先に refresh していた場合は
-// POST せずにその結果を返す。
+// 更新後の credentials を返す。他プロセス (CLI) との競合は 2 か所で見る:
+// POST 直前に読み直して更新済みなら POST を省き、POST 後は writeCredentials の
+// compare-and-swap でファイル側の更新を優先する。
 async function refreshAccessToken(credentials) {
   const config = refreshConfig();
   const refreshToken = credentials.oauth && credentials.oauth.refreshToken;
@@ -390,8 +435,7 @@ async function refreshAccessToken(credentials) {
   }, body);
 
   const oauth = mergeRefreshResponse(credentials.oauth, json);
-  await writeCredentials(credentials.raw, oauth);
-  return { raw: { ...credentials.raw, claudeAiOauth: oauth }, oauth, accessToken: oauth.accessToken };
+  return writeCredentials(credentials.raw, oauth, credentials.accessToken);
 }
 
 async function readFreshCredentialsIfChanged(previousAccessToken) {
@@ -400,14 +444,17 @@ async function readFreshCredentialsIfChanged(previousAccessToken) {
   return null;
 }
 
-// refresh の失敗を「refresh token が死んでいて再ログインしか手が無い」ものと
-// 「一時的な障害」に分ける。前者だけ claude_unauthorized に変換し、main.js の
-// フォールバック (ポップオーバーを開いたときのブラウザ再ログイン) へ渡す。
-// 一時障害まで変換すると、通信断やサーバ障害のたびにブラウザが開いてしまう。
+// refresh の失敗を「再ログインしか手が無い」ものと「一時的な障害」に分ける。
+// 前者だけ claude_unauthorized に変換し、main.js のフォールバック (ポップオーバー
+// を開いたときのブラウザ再ログイン) へ渡す。一時障害まで変換すると、通信断や
+// サーバ障害のたびにブラウザが開いてしまう。
 function isFatalRefreshError(err) {
   if (!err || !err.code) return false;
-  // token endpoint の 400 は invalid_grant 等、401 は client 認証の失敗。
-  // どちらも手元の refresh token では復旧できない。
+  // token endpoint の 400 は invalid_grant 等、401 は client 認証の失敗。手元の
+  // refresh token では復旧できない。endpoint / client_id が上流の変更で陳腐化した
+  // ケースもここに落ちるが、意図的に同じ扱いにする: `claude login` なら CLI の
+  // 最新の値でブラウザ認証が通り、アプリが動かなくなるより良い。どちらだったかは
+  // describeRefreshFailure が付ける body の `error` で判別する。
   if (err.code === 'claude_http_error') return err.status === 400;
   if (err.code === 'claude_unauthorized') return true;
   if (err.code === 'claude_refresh_token_missing') return true;
@@ -415,6 +462,36 @@ function isFatalRefreshError(err) {
   // 429 / 5xx / ネットワーク / タイムアウト、およびレスポンス形状の異常は
   // 再ログインで直るものではないので、そのまま呼び出し元へ返す。
   return false;
+}
+
+// OAuth の error レスポンス (`{"error":"invalid_grant","error_description":"..."}`)
+// から原因を 1 行に潰す。JSON でない、または error を含まない body は諦める。
+function parseOAuthErrorBody(body) {
+  if (typeof body !== 'string' || !body) return null;
+  let json;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!json || typeof json !== 'object') return null;
+  const error = typeof json.error === 'string' && json.error ? json.error : null;
+  const description = typeof json.error_description === 'string' && json.error_description
+    ? json.error_description
+    : null;
+  const text = error && description ? `${error}: ${description}` : (error || description);
+  return text ? text.slice(0, 200) : null;
+}
+
+// 再ログイン案内に付ける補足。refresh token の失効 (invalid_grant) と、endpoint /
+// client_id の陳腐化 (invalid_client / invalid_request) はどちらも再ログインへ
+// 落ちるので、ログとメッセージで区別できるように原因を残す。
+function describeRefreshFailure(err) {
+  if (!err) return null;
+  const detail = parseOAuthErrorBody(err.body);
+  if (detail) return detail;
+  if (err.status) return `status ${err.status}`;
+  return null;
 }
 
 // 期限切れや 401 からの回復を試みる。成功したら使える credentials を返し、
@@ -428,9 +505,10 @@ async function tryRecoverCredentials(credentials) {
     // 無効になっているだけで再ログインは要らない。更新後の値を使う。
     const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
     if (reread) return reread;
+    const detail = describeRefreshFailure(err);
     throw makeError(
       'claude_unauthorized',
-      'Anthropic から認証エラー (401)。`claude login` で再ログインしてください。',
+      `Anthropic から認証エラー (401)。\`claude login\` で再ログインしてください。${detail ? ` (refresh 失敗: ${detail})` : ''}`,
     );
   }
 }
@@ -477,12 +555,15 @@ async function shutdown() {
 module.exports = {
   fetch,
   shutdown,
+  credentialsPath,
   _private: {
+    setTransport,
     mergeRefreshResponse,
     normalizeExpiresAt,
     shouldRefresh,
     refreshConfig,
     isFatalRefreshError,
+    describeRefreshFailure,
     parseBucket,
     parseWeeklyScoped,
     parseCredits,

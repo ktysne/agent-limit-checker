@@ -34,9 +34,11 @@
 - 前倒し refresh をしない理由:
   - refresh token は refresh のたびに回転する。期限内に前倒しで refresh すると、CLI が保持している token を無効にしうる。
   - 同じ理由で、POST 直前に credentials.json を読み直し、他プロセスが更新済みならその値を使って POST を省く。
+  - POST 後の書き戻しも compare-and-swap にする。書き込み直前に読み直した accessToken が POST 前と違えば書かず、ファイル側の credentials を採用する (CLI が書いた token と未知フィールドを古い内容で潰さないため)。
 - 残リスク:
   - endpoint / client_id は CLI の埋め込み値で、公式の公開仕様ではない。上流の変更で無効になりうる。
-  - refresh token の期限 (約 30 日) が切れた場合や、endpoint が 400 / 401 を返した場合は `claude login` に委ねる。
+  - refresh token の期限 (約 30 日) が切れた場合と、endpoint が 400 / 401 を返した場合は `claude login` に委ねる。後者には endpoint / client_id の陳腐化も含まれるが、再ログインなら CLI の最新の値でブラウザ認証が通るので、意図的に同じ扱いにする。
+  - 原因の区別は claude_unauthorized のメッセージ末尾に `(refresh 失敗: invalid_grant)` の形で残す。
   - 429 / 5xx / ネットワーク障害は再ログイン扱いにしない (一時障害でブラウザを開かせないため)。
 
 ### B. Codex CLI の起動経路 (対応済み)
