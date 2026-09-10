@@ -10,3 +10,5 @@ _reference/
 # ai-cross-review のローカル状態と生成物 (往復回数、レビュー出力、PR コメント本文)
 .cross-review-state.json
 .cross-review/
+# CodeGraph のローカル索引 (マシン固有。コミットしない)
+.codegraph/
