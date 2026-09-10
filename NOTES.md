@@ -116,10 +116,19 @@
 - ⚠ 重要 (1.4.0 で再発 → 2026-06-03 に再修正): 単純に `Math.ceil(content)` を送る初版では **分数 DPI で直らなかった**。
   - 実機 (scaleFactor=1.5 / 150%) で計測すると、`setContentSize(360, 563)` を呼んでも実ビューポートは **556px** にしかならず (約 7px 不足)、563px のコンテンツが 7〜13px はみ出してスクロールバーが出続けていた。`getContentSize` の幅も 360→346 とズレており、Electron の非フレーム窓 + 分数 DPI での丸め (不可視 DWM フレーム由来と思われる) が原因。不足量は scaleFactor 依存なので固定値で補正できない。
   - 対策 = **自己補正ループ + `overflow: hidden`**:
-    - `renderer.js#syncWindowHeight()` が `content` (= `.container` の高さ) と `overflow` (= `documentElement.scrollHeight - innerHeight`) を見て、はみ出していれば `requestedHeight + overflow` を要求して窓を伸ばし、余白が出れば縮める。`ResizeObserver` + `window` の `resize` で駆動し、2px ヒステリシスで 2〜3 フレーム (実測 5〜7 通知) で収束。実際のはみ出しを観測して詰めるので DPI 補正の固定値が不要。
+    - `renderer.js#syncWindowHeight()` が `content` (= `.container` の高さ) と `overflow` (= `documentElement.scrollHeight - innerHeight`) を見て、はみ出していれば `requestedHeight + overflow` を要求して窓を伸ばし、余白が出れば縮める。`ResizeObserver` + `window` の `resize` で駆動し、はみ出しを観測して詰めるので DPI 補正の固定値が不要。収束の仕組みは下の「揺れによる発振の再修正」を参照。
     - `style.css` の `html, body { overflow: hidden }` でスクロールバーを物理的に出さない。窓は常にコンテンツ以上のサイズに収束するので、隠れるのは収束途中のサブピクセル余白だけ (実コンテンツは欠けない)。
     - `preload.js#reportContentHeight` で `content-height` を送るのは従来通り。
 - 検証: `npx electron test/popover-fit-probe.js [scaleFactor]` が PASS。スクリーンショットと同じ最も背の高いスナップショット (Sonnet が「ウィンドウ未開始…」の長行) を実 renderer + preload に流し、`force-device-scale-factor` で **1.0 / 1.25 / 1.5 / 2.0 すべて `scrollPx=0` かつ gap≤1px に収束** することを確認。
+- ⚠ 揺れによる発振の再修正 (2026-09-10): 初版のループは 125% で 2 つの高さを交互に要求し続けることがあった (Codex 3 アカウント + 設定パネル閉で 829 ↔ 838)。
+  - 原因は 2 つ。縮めるときに不足量を無視して `content` そのものを要求していたこと。そして `setContentSize` の不足量が一定ではなく、近い高さの間で 1〜2px 揺れること (829 要求で 9px 不足、838 要求で 7px 不足)。伸ばした先で余白が 2px を超えて縮小が走り、縮めた先でまたはみ出す、という往復になっていた。
+  - 修正後のループ (`renderer.js#evaluateWindowHeight()`):
+    - 要求値は常に `content + 不足量` (不足量 = 直前の要求値 − 実ビューポート、上限 24px)。伸ばすときは `直前の要求値 + はみ出し量` も下限にして、必ず前進する。
+    - 縮めるのは余白が 4px 以上のときだけ。伸ばした直後の余白は「不足量の揺れ (≤2px) + サブピクセル (<1px)」に収まるので、この幅なら縮小が走らない。
+    - 不足量が 0〜24px の範囲外なら、直前の要求がまだ反映されていない (ビューポートが古い) と見なして何もしない。クランプ中は窓が上限に張り付いていることが分かっているので、この判定は使わない。
+    - 窓のリサイズは複数の `resize` イベントに分かれて届き、途中の値は最終値ではない (最初の 1 件はフレーム分の補正前の値で、要求値そのものに見えることがある)。そのためビューポートが 50ms 静止してから評価する。初回だけは即時に測る。
+    - 1px だけ違う要求は同じビューポートに着地して `resize` が発火しないことがあるので、要求の 120ms 後に 1 回だけ強制的に再評価する。
+  - 検証: `popover-fit-probe.js` の各フェーズ (初期フィット、パネル閉、上限引き上げ) に「収束後の待機中に要求が増えない」検査を追加。旧コードでは 1.25 で無限に交互要求するのでこの検査が FAIL する。修正後は 1.0 / 1.25 / 1.5 / 2.0 で初期フィット 2 要求、パネル開 1 要求、パネル閉 2 要求で収束。
 - 上限を超えたときの挙動 (現在の仕様):
   - 高さの上限は `min(900, トレイのある display の workArea.height - 8)`。表示領域を読めないときだけ 900 に落とす。1080p の 150% 表示は作業領域が約 690px しかなく、900px 固定では窓が画面外にはみ出すため。
   - 上限でクランプしたときだけ main が `content-clamped` を送り、renderer が `html.clamped` を付けて `overflow-y: auto` にする。通常時は従来どおり `overflow: hidden` のままで、分数 DPI の数 px の余りでスクロールバーは出ない。
