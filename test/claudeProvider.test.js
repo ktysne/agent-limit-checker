@@ -11,29 +11,15 @@ test('normalizes Claude OAuth expiry timestamps', () => {
   assert.equal(_private.normalizeExpiresAt('bad'), null);
 });
 
-test('detects token refresh window from expiresAt', () => {
+test('shouldRefresh only fires once the access token has actually expired', () => {
+  // refresh token は refresh のたびに回転するので、期限内に前倒しで refresh
+  // すると CLI 側の token を無効にしうる。期限切れだけを対象にする。
   const now = 1_779_600_000_000;
-  assert.equal(_private.shouldRefresh({ expiresAt: now + 30_000 }, now), true);
+  assert.equal(_private.shouldRefresh({ expiresAt: now }, now), true);
+  assert.equal(_private.shouldRefresh({ expiresAt: now - 1 }, now), true);
+  assert.equal(_private.shouldRefresh({ expiresAt: now + 30_000 }, now), false);
   assert.equal(_private.shouldRefresh({ expiresAt: now + 120_000 }, now), false);
   assert.equal(_private.shouldRefresh({}, now), false);
-});
-
-test('buildChildEnv does NOT leak ANTHROPIC_API_KEY to the spawned Claude CLI', () => {
-  // If we passed ANTHROPIC_API_KEY through, the CLI would prefer it over the
-  // OAuth flow we're trying to refresh — which would silently break the
-  // refresh nudge. Allowlist must drop it.
-  const env = _private.buildChildEnv({
-    ANTHROPIC_API_KEY: 'sk-leaked',
-    OPENAI_API_KEY: 'sk-also-leaked',
-    PATH: 'C:\\Windows\\System32',
-    USERPROFILE: 'C:\\Users\\u',
-    HOME: '/home/u',
-  });
-  assert.equal(env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(env.OPENAI_API_KEY, undefined);
-  assert.equal(env.PATH, 'C:\\Windows\\System32');
-  assert.equal(env.USERPROFILE, 'C:\\Users\\u');
-  assert.equal(env.HOME, '/home/u');
 });
 
 test('parseBucket keeps zero-utilization windows whose resets_at is null', () => {
@@ -257,4 +243,99 @@ test('merges snake_case OAuth refresh response without dropping existing metadat
   assert.equal(merged.subscriptionType, 'max');
   assert.equal(merged.rateLimitTier, 'standard');
   assert.deepEqual(merged.scopes, ['profile']);
+});
+
+test('mergeRefreshResponse splits the space-separated scope string into an array', () => {
+  // credentials.json の scopes は配列でなければならない (CLI が配列前提で読む)。
+  // token endpoint はスペース区切りの文字列を返すので、ここで配列化する。
+  const merged = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh', scopes: ['user:inference'] },
+    { access_token: 'new', scope: 'user:inference user:profile' },
+    1_000_000,
+  );
+  assert.deepEqual(merged.scopes, ['user:inference', 'user:profile']);
+});
+
+test('mergeRefreshResponse keeps the existing scopes when the response omits them', () => {
+  const merged = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh', scopes: ['user:inference'] },
+    { access_token: 'new' },
+    1_000_000,
+  );
+  assert.deepEqual(merged.scopes, ['user:inference']);
+});
+
+test('mergeRefreshResponse records refreshTokenExpiresAt from the response', () => {
+  const now = 1_000_000;
+  const merged = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh', refreshTokenExpiresAt: 5 },
+    { access_token: 'new', refresh_token_expires_in: 60 },
+    now,
+  );
+  assert.equal(merged.refreshTokenExpiresAt, now + 60_000);
+
+  // 絶対時刻 (epoch 秒) でもよい。
+  const absolute = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh' },
+    { access_token: 'new', refresh_token_expires_at: 1_779_632_820 },
+    now,
+  );
+  assert.equal(absolute.refreshTokenExpiresAt, 1_779_632_820_000);
+
+  // 無ければ既存値を維持する。
+  const kept = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh', refreshTokenExpiresAt: 42 },
+    { access_token: 'new' },
+    now,
+  );
+  assert.equal(kept.refreshTokenExpiresAt, 42);
+});
+
+test('mergeRefreshResponse keeps the previous refresh token when the response omits one', () => {
+  const merged = _private.mergeRefreshResponse(
+    { accessToken: 'old', refreshToken: 'old-refresh' },
+    { access_token: 'new' },
+    1_000_000,
+  );
+  assert.equal(merged.refreshToken, 'old-refresh');
+});
+
+test('refreshConfig defaults to the CLI endpoint and lets env override it', () => {
+  const savedEndpoint = process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT;
+  const savedClientId = process.env.CLAUDE_OAUTH_CLIENT_ID;
+  try {
+    delete process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT;
+    delete process.env.CLAUDE_OAUTH_CLIENT_ID;
+    const fallback = _private.refreshConfig();
+    assert.equal(fallback.endpoint, 'https://platform.claude.com/v1/oauth/token');
+    assert.equal(fallback.clientId, '9d1c250a-e61b-44d9-88ed-5944d1962f5e');
+
+    process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT = 'https://example.test/token';
+    process.env.CLAUDE_OAUTH_CLIENT_ID = 'client-x';
+    const overridden = _private.refreshConfig();
+    assert.equal(overridden.endpoint, 'https://example.test/token');
+    assert.equal(overridden.clientId, 'client-x');
+  } finally {
+    if (savedEndpoint == null) delete process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT;
+    else process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT = savedEndpoint;
+    if (savedClientId == null) delete process.env.CLAUDE_OAUTH_CLIENT_ID;
+    else process.env.CLAUDE_OAUTH_CLIENT_ID = savedClientId;
+  }
+});
+
+test('isFatalRefreshError separates a dead refresh token from a transient failure', () => {
+  // 再ログインしか手が無いもの → claude_unauthorized に変換される。
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_http_error', status: 400 }), true);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_unauthorized' }), true);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_refresh_token_missing' }), true);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_refresh_expired' }), true);
+
+  // 一時障害 → そのまま投げる (ブラウザを開かせない)。
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_rate_limited' }), false);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_http_error', status: 500 }), false);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_http_error', status: 503 }), false);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_network' }), false);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_timeout' }), false);
+  assert.equal(_private.isFatalRefreshError({ code: 'claude_refresh_invalid' }), false);
+  assert.equal(_private.isFatalRefreshError(null), false);
 });

@@ -27,13 +27,17 @@
 
 ### A. Claude トークンの自動リフレッシュ (対応済み / 制限あり)
 - 実装済み:
-  - `~/.claude/.credentials.json` の `expiresAt` を見て期限切れ直前を検知。
-  - 401 時に credentials を再読込し、CLI 側で更新済みの access token があれば 1 回だけ再試行。
+  - `~/.claude/.credentials.json` の `expiresAt` が既に切れているときだけ、refresh token で直接 refresh する。
+  - 401 時に credentials を再読込し、CLI 側で更新済みの access token があれば 1 回だけ再試行。それでも駄目なら直接 refresh する。
   - トレイ tooltip / コンテキストメニューに `login required` などのエラー状態を表示。
-  - OAuth refresh は `CLAUDE_OAUTH_TOKEN_ENDPOINT` と `CLAUDE_OAUTH_CLIENT_ID` が両方設定されている場合のみ有効化。
+  - refresh endpoint / client_id は CLI と同じ値を既定で使う。`CLAUDE_OAUTH_TOKEN_ENDPOINT` と `CLAUDE_OAUTH_CLIENT_ID` は上書き用。
+- 前倒し refresh をしない理由:
+  - refresh token は refresh のたびに回転する。期限内に前倒しで refresh すると、CLI が保持している token を無効にしうる。
+  - 同じ理由で、POST 直前に credentials.json を読み直し、他プロセスが更新済みならその値を使って POST を省く。
 - 残リスク:
-  - Anthropic の Claude Code 用 OAuth refresh endpoint / client_id は公式公開仕様として確認できていないため、既定では direct refresh しない。
-  - endpoint を設定しない場合、最終的な期限切れ復旧は `claude login` に委ねる。
+  - endpoint / client_id は CLI の埋め込み値で、公式の公開仕様ではない。上流の変更で無効になりうる。
+  - refresh token の期限 (約 30 日) が切れた場合や、endpoint が 400 / 401 を返した場合は `claude login` に委ねる。
+  - 429 / 5xx / ネットワーク障害は再ログイン扱いにしない (一時障害でブラウザを開かせないため)。
 
 ### B. Codex CLI の起動経路 (対応済み)
 - `src/cliPaths.js` を追加し、`CODEX_PATH` → `codex.exe` → `codex.cmd` → `codex.bat` → `codex.ps1` → `codex` の順で探索。
