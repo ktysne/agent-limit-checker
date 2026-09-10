@@ -356,7 +356,15 @@ test('describeRefreshFailure falls back to the status when the body carries no O
       status: 400,
       body: '{"error":"invalid_grant","error_description":"refresh token expired"}',
     }),
-    'invalid_grant: refresh token expired',
+    'invalid_grant',
+  );
+  // 自由文や未知のコードはログ / UI に流さない。
+  assert.equal(
+    _private.describeRefreshFailure({
+      status: 400,
+      body: '{"error":"weird\nline","error_description":"secret"}',
+    }),
+    'status 400',
   );
   assert.equal(_private.describeRefreshFailure({ status: 401, body: '<html>nope</html>' }), 'status 401');
   assert.equal(_private.describeRefreshFailure({ code: 'claude_refresh_expired' }), null);

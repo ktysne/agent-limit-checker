@@ -464,8 +464,17 @@ function isFatalRefreshError(err) {
   return false;
 }
 
-// OAuth の error レスポンス (`{"error":"invalid_grant","error_description":"..."}`)
-// から原因を 1 行に潰す。JSON でない、または error を含まない body は諦める。
+// OAuth の error レスポンス (`{"error":"invalid_grant", ...}`) から原因を取り出す。
+// 不変条件: ログと UI に載せるのは RFC 6749 の固定エラーコードだけで、
+// `error_description` のような自由文は使わない。endpoint は環境変数で差し替え
+// られるので、応答本文は信頼できない外部入力として扱う (秘密情報の混入や
+// 改行によるログ行の偽装を防ぐ)。JSON でない、または既知のコードでない body は
+// 諦めて null を返す。
+const OAUTH_ERROR_CODES = new Set([
+  'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
+  'unsupported_grant_type', 'invalid_scope',
+]);
+
 function parseOAuthErrorBody(body) {
   if (typeof body !== 'string' || !body) return null;
   let json;
@@ -475,12 +484,7 @@ function parseOAuthErrorBody(body) {
     return null;
   }
   if (!json || typeof json !== 'object') return null;
-  const error = typeof json.error === 'string' && json.error ? json.error : null;
-  const description = typeof json.error_description === 'string' && json.error_description
-    ? json.error_description
-    : null;
-  const text = error && description ? `${error}: ${description}` : (error || description);
-  return text ? text.slice(0, 200) : null;
+  return typeof json.error === 'string' && OAUTH_ERROR_CODES.has(json.error) ? json.error : null;
 }
 
 // 再ログイン案内に付ける補足。refresh token の失効 (invalid_grant) と、endpoint /
