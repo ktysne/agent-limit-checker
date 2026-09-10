@@ -28,8 +28,13 @@ npm start
 保護された自前サーバーやアカウント付きトピックへ送る場合は、任意で Access token も設定できます。
 
 ## Claude OAuth refresh
-既定では Claude Code CLI が更新した `~/.claude/.credentials.json` を読み直して復旧します。
-Anthropic の refresh endpoint / client_id を明示できる環境だけ、以下を設定すると direct refresh を試します。
+access token が期限切れになると、`~/.claude/.credentials.json` の refresh token を使って自動で更新します。
+ブラウザは開きません。更新した token は同じファイルへ書き戻すので、Claude Code CLI もそのまま使えます。
+
+`claude login` による再ログインが必要なのは、refresh token 自体の期限 (約 30 日) が切れたときと、refresh に使う endpoint / client_id が上流の変更で無効になったときです。
+どちらの場合も、エラーメッセージ末尾の `(refresh 失敗: ...)` に token endpoint が返した理由が入ります (`invalid_grant` なら refresh token の失効、`invalid_client` / `invalid_request` なら endpoint / client_id 側)。
+
+refresh に使う endpoint / client_id は CLI と同じ値を既定で使います。上書きしたい場合のみ以下を設定してください。
 
 ```powershell
 $env:CLAUDE_OAUTH_TOKEN_ENDPOINT = "https://..."
@@ -37,7 +42,7 @@ $env:CLAUDE_OAUTH_CLIENT_ID = "..."
 ```
 
 ## トラブルシュート
-- **Claude が「401 Unauthorized」になる** → `claude login` を再実行。次回ポーリングで更新後の credentials を読み直します。
+- **Claude が「401 Unauthorized」になる** → refresh token の期限切れか、refresh endpoint / client_id が上流で変わって refresh 自体が拒否された状態です。どちらもメッセージ末尾の `(refresh 失敗: ...)` で見分けられます。`claude login` を再実行すると、次回ポーリングで更新後の credentials を読み直します。
 - **Claude login ボタンで CLI が見つからない** → `CLAUDE_PATH` に `claude.exe` / `claude.cmd` / `claude.ps1` のパスを設定。
 - **Codex が「codex_cli_missing」になる** → PowerShell で `npm i -g @openai/codex` を実行。
 - **Codex login ボタンで CLI が見つからない** → `CODEX_PATH` に `codex.exe` / `codex.cmd` / `codex.ps1` のパスを設定。

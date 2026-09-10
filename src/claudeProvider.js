@@ -4,20 +4,31 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const https = require('node:https');
-const { spawn } = require('node:child_process');
-
-const { resolveClaudeExecutable } = require('./cliPaths');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const REQUEST_TIMEOUT_MS = 12_000;
-const REFRESH_MARGIN_MS = 60_000;
-const CLI_NUDGE_TIMEOUT_MS = 15_000;
+
+// Claude Code CLI は CLAUDE_CONFIG_DIR が設定されていればそこを設定ディレクトリ
+// として使う。credentials は CLI と共有するので、同じ規則で解決する。
+// 呼び出しのたびに解決する (モジュール読み込み時に固定しない) ので、環境変数を
+// 差し替えれば参照先も切り替わる。
+function credentialsPath() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  const base = configDir && configDir.trim() ? configDir.trim() : path.join(os.homedir(), '.claude');
+  return path.join(base, '.credentials.json');
+}
+
+// Claude Code CLI 自身が OAuth refresh に使う endpoint / client_id。公開仕様では
+// なく CLI に埋め込まれた値なので、上流の更新で変わりうる。値が無効になると
+// refresh が 400/401 で失敗し、`claude login` によるブラウザ再ログインへ落ちる。
+// 環境変数を設定すればここを上書きできる。
+const DEFAULT_TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
+const DEFAULT_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 async function readCredentials() {
   let raw;
   try {
-    raw = await fs.readFile(CREDENTIALS_PATH, 'utf8');
+    raw = await fs.readFile(credentialsPath(), 'utf8');
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       throw makeError(
@@ -51,10 +62,18 @@ function makeError(code, message, extra) {
   return err;
 }
 
+// HTTP の実体は差し替え可能にしておく。テストが token endpoint と usage API を
+// モックするための唯一の注入点で、既定は node:https の request。
+let transport = https.request;
+
+function setTransport(fn) {
+  transport = fn || https.request;
+}
+
 function httpJson(url, options) {
   return new Promise((resolve, reject) => {
     const body = options.body || null;
-    const req = https.request(
+    const req = transport(
       url,
       {
         method: options.method || 'GET',
@@ -82,9 +101,12 @@ function httpJson(url, options) {
             return;
           }
           if (res.statusCode === 401) {
+            // body を残すのは、token endpoint の 401 で OAuth の `error` を
+            // 再ログイン案内の補足に回すため (describeRefreshFailure)。
             reject(makeError(
               'claude_unauthorized',
               'Anthropic から認証エラー (401)。`claude login` で再ログインしてください。',
+              { status: res.statusCode, body: body.slice(0, 500) },
             ));
             return;
           }
@@ -265,16 +287,43 @@ function normalizeExpiresAt(value, now = Date.now()) {
   return n < 10_000_000_000 ? n * 1000 : n;
 }
 
+// refresh token は refresh のたびに回転し、新しい token が出た時点で古い token は
+// 無効になる。CLI と同時に refresh すると片方が失われるので、期限内の前倒し
+// refresh はしない。「既に期限切れか」だけを見る。
 function shouldRefresh(oauth, now = Date.now()) {
   const expiresAt = normalizeExpiresAt(oauth && oauth.expiresAt, now);
-  return !!expiresAt && expiresAt <= now + REFRESH_MARGIN_MS;
+  return !!expiresAt && expiresAt <= now;
 }
 
 function refreshConfig() {
-  const endpoint = process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT;
-  const clientId = process.env.CLAUDE_OAUTH_CLIENT_ID;
-  if (!endpoint || !clientId) return null;
-  return { endpoint, clientId };
+  return {
+    endpoint: process.env.CLAUDE_OAUTH_TOKEN_ENDPOINT || DEFAULT_TOKEN_ENDPOINT,
+    clientId: process.env.CLAUDE_OAUTH_CLIENT_ID || DEFAULT_CLIENT_ID,
+  };
+}
+
+// 不変条件: credentials.json の `claudeAiOauth.scopes` は必ず配列である。CLI は
+// この値を配列として扱い、文字列だと `loggedIn: false` になる。token endpoint は
+// スペース区切りの文字列 (`scope`) を返すので、ここで配列へ正規化する。
+function normalizeScopes(value, fallback) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const parts = value.split(/\s+/).filter(Boolean);
+    if (parts.length) return parts;
+  }
+  return fallback;
+}
+
+// 絶対時刻 (epoch 秒/ミリ秒) があればそれを、無ければ相対秒から算出し、
+// どちらも無ければ既存値を維持する。
+function resolveExpiry(absolute, relativeSeconds, fallback, now) {
+  const abs = normalizeExpiresAt(absolute, now);
+  if (abs) return abs;
+  if (relativeSeconds != null) {
+    const secs = Number(relativeSeconds);
+    if (Number.isFinite(secs) && secs > 0) return now + secs * 1000;
+  }
+  return fallback;
 }
 
 function mergeRefreshResponse(existingOauth, json, now = Date.now()) {
@@ -284,41 +333,71 @@ function mergeRefreshResponse(existingOauth, json, now = Date.now()) {
   }
 
   const refreshToken = json.refreshToken || json.refresh_token || existingOauth.refreshToken;
-  const expiresAt = normalizeExpiresAt(
+  const expiresAt = resolveExpiry(
     json.expiresAt || json.expires_at,
+    json.expiresIn != null ? json.expiresIn : json.expires_in,
+    existingOauth.expiresAt,
     now,
-  ) || (Number.isFinite(Number(json.expiresIn || json.expires_in))
-    ? now + Number(json.expiresIn || json.expires_in) * 1000
-    : existingOauth.expiresAt);
+  );
+  const refreshTokenExpiresAt = resolveExpiry(
+    json.refreshTokenExpiresAt || json.refresh_token_expires_at,
+    json.refreshTokenExpiresIn != null ? json.refreshTokenExpiresIn : json.refresh_token_expires_in,
+    existingOauth.refreshTokenExpiresAt,
+    now,
+  );
 
+  // CLI が読む未知のフィールドを落とさないよう、既存の値を土台にする。
   return {
     ...existingOauth,
     accessToken,
     refreshToken,
     expiresAt,
-    scopes: json.scopes || json.scope || existingOauth.scopes,
+    refreshTokenExpiresAt,
+    scopes: normalizeScopes(json.scopes || json.scope, normalizeScopes(existingOauth.scopes, [])),
   };
 }
 
-async function writeCredentials(rawCredentials, oauth) {
-  const next = {
-    ...rawCredentials,
-    claudeAiOauth: oauth,
-  };
-  const dir = path.dirname(CREDENTIALS_PATH);
+async function writeCredentialsFile(next) {
+  const target = credentialsPath();
+  const dir = path.dirname(target);
   const tmp = path.join(dir, `.credentials.${process.pid}.${Date.now()}.tmp`);
   await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  await fs.rename(tmp, CREDENTIALS_PATH);
+  await fs.rename(tmp, target);
 }
 
+// refresh 結果を compare-and-swap で書き戻し、採用した credentials を返す。
+// 不変条件: 書き込み直前に読み直した `claudeAiOauth.accessToken` が POST 前の値
+// と一致するときだけ書く。POST の最中に CLI が credentials.json を更新していた
+// 場合、古い土台でファイル全体を置換すると CLI が書いた token や未知フィールドを
+// 壊すため、こちらの refresh 結果は捨ててファイルの内容を採用する (refresh token
+// は回転するので、後から書かれたほうが有効な token を持つ)。
+// 書くときの土台も読み直した最新の raw にして、`claudeAiOauth` 以外の未知
+// フィールドを最新の状態から引き継ぐ。
+// 読み直せない (ファイルが無い / JSON が壊れている) 場合は復旧を優先し、自分の
+// 結果を書く。
+async function writeCredentials(fallbackRaw, oauth, previousAccessToken) {
+  let latest = null;
+  try {
+    latest = await readCredentials();
+  } catch {
+    latest = null;
+  }
+  if (latest && latest.accessToken !== previousAccessToken) return latest;
+
+  const next = {
+    ...(latest ? latest.raw : fallbackRaw),
+    claudeAiOauth: oauth,
+  };
+  await writeCredentialsFile(next);
+  return { raw: next, oauth, accessToken: oauth.accessToken };
+}
+
+// access token を直接 refresh する。成功したら credentials.json を書き換え、
+// 更新後の credentials を返す。他プロセス (CLI) との競合は 2 か所で見る:
+// POST 直前に読み直して更新済みなら POST を省き、POST 後は writeCredentials の
+// compare-and-swap でファイル側の更新を優先する。
 async function refreshAccessToken(credentials) {
   const config = refreshConfig();
-  if (!config) {
-    throw makeError(
-      'claude_refresh_unconfigured',
-      'OAuth refresh は未設定です。`claude login` で再ログインしてください。',
-    );
-  }
   const refreshToken = credentials.oauth && credentials.oauth.refreshToken;
   if (!refreshToken || typeof refreshToken !== 'string') {
     throw makeError(
@@ -326,6 +405,21 @@ async function refreshAccessToken(credentials) {
       'refresh token が見つかりません。`claude login` で再ログインしてください。',
     );
   }
+
+  // refresh token 自体の期限 (約 30 日) が切れていれば refresh は必ず失敗する。
+  // 無駄な POST を避けて再ログインへ回す。
+  const refreshTokenExpiresAt = normalizeExpiresAt(credentials.oauth.refreshTokenExpiresAt);
+  if (refreshTokenExpiresAt && refreshTokenExpiresAt <= Date.now()) {
+    throw makeError(
+      'claude_refresh_expired',
+      'refresh token の期限が切れています。`claude login` で再ログインしてください。',
+    );
+  }
+
+  // refresh token は回転するため、CLI が先に refresh していると手元の token は
+  // 既に無効。POST 直前にファイルを読み直し、更新済みならその値をそのまま使う。
+  const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
+  if (reread) return reread;
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -341,8 +435,7 @@ async function refreshAccessToken(credentials) {
   }, body);
 
   const oauth = mergeRefreshResponse(credentials.oauth, json);
-  await writeCredentials(credentials.raw, oauth);
-  return { raw: { ...credentials.raw, claudeAiOauth: oauth }, oauth, accessToken: oauth.accessToken };
+  return writeCredentials(credentials.raw, oauth, credentials.accessToken);
 }
 
 async function readFreshCredentialsIfChanged(previousAccessToken) {
@@ -351,141 +444,95 @@ async function readFreshCredentialsIfChanged(previousAccessToken) {
   return null;
 }
 
-// Spawn `claude auth status --json` non-interactively. The official CLI
-// handles its OAuth refresh internally — if the access token is expired but
-// the refresh token is still valid, the CLI will silently update
-// `~/.claude/.credentials.json`. We then re-read the file and retry.
-//
-// Returns `true` if the CLI reported `loggedIn: true` (so a retry has a
-// chance of succeeding), `false` otherwise. Never throws.
-function spawnClaudeAuthStatus(exe) {
-  const env = buildChildEnv(process.env);
-  const lowered = exe.toLowerCase();
-  if (lowered.endsWith('.ps1')) {
-    return spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', exe, 'auth', 'status', '--json'],
-      { stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true },
-    );
-  }
-  if (lowered.endsWith('.cmd') || lowered.endsWith('.bat')) {
-    return spawn(
-      process.env.ComSpec || 'cmd.exe',
-      ['/d', '/s', '/c', `"${exe}" auth status --json`],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env,
-        windowsHide: true,
-        windowsVerbatimArguments: true,
-      },
-    );
-  }
-  return spawn(exe, ['auth', 'status', '--json'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env,
-    windowsHide: true,
-  });
+// refresh の失敗を「再ログインしか手が無い」ものと「一時的な障害」に分ける。
+// 前者だけ claude_unauthorized に変換し、main.js のフォールバック (ポップオーバー
+// を開いたときのブラウザ再ログイン) へ渡す。一時障害まで変換すると、通信断や
+// サーバ障害のたびにブラウザが開いてしまう。
+function isFatalRefreshError(err) {
+  if (!err || !err.code) return false;
+  // token endpoint の 400 は invalid_grant 等、401 は client 認証の失敗。手元の
+  // refresh token では復旧できない。endpoint / client_id が上流の変更で陳腐化した
+  // ケースもここに落ちるが、意図的に同じ扱いにする: `claude login` なら CLI の
+  // 最新の値でブラウザ認証が通り、アプリが動かなくなるより良い。どちらだったかは
+  // describeRefreshFailure が付ける body の `error` で判別する。
+  if (err.code === 'claude_http_error') return err.status === 400;
+  if (err.code === 'claude_unauthorized') return true;
+  if (err.code === 'claude_refresh_token_missing') return true;
+  if (err.code === 'claude_refresh_expired') return true;
+  // 429 / 5xx / ネットワーク / タイムアウト、およびレスポンス形状の異常は
+  // 再ログインで直るものではないので、そのまま呼び出し元へ返す。
+  return false;
 }
 
-function buildChildEnv(base) {
-  // Whitelist only the env vars Claude CLI needs. Crucially, do NOT pass
-  // `ANTHROPIC_API_KEY` — if that's set in the parent process the CLI uses
-  // it instead of OAuth, which defeats the purpose of refreshing the
-  // OAuth token.
-  const allow = [
-    'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
-    'USERNAME', 'TEMP', 'TMP', 'SystemRoot', 'windir',
-    'PATH', 'PATHEXT', 'LANG', 'LC_ALL',
-    'CLAUDE_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'ComSpec',
-  ];
-  const env = {};
-  for (const k of allow) {
-    if (base[k] != null) env[k] = base[k];
+// OAuth の error レスポンス (`{"error":"invalid_grant", ...}`) から原因を取り出す。
+// 不変条件: ログと UI に載せるのは RFC 6749 の固定エラーコードだけで、
+// `error_description` のような自由文は使わない。endpoint は環境変数で差し替え
+// られるので、応答本文は信頼できない外部入力として扱う (秘密情報の混入や
+// 改行によるログ行の偽装を防ぐ)。JSON でない、または既知のコードでない body は
+// 諦めて null を返す。
+const OAUTH_ERROR_CODES = new Set([
+  'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
+  'unsupported_grant_type', 'invalid_scope',
+]);
+
+function parseOAuthErrorBody(body) {
+  if (typeof body !== 'string' || !body) return null;
+  let json;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return null;
   }
-  return env;
+  if (!json || typeof json !== 'object') return null;
+  return typeof json.error === 'string' && OAUTH_ERROR_CODES.has(json.error) ? json.error : null;
 }
 
-async function nudgeClaudeRefresh() {
-  const exe = resolveClaudeExecutable();
-  if (!exe) return false;
-
-  return new Promise((resolve) => {
-    let proc;
-    try {
-      proc = spawnClaudeAuthStatus(exe);
-    } catch {
-      resolve(false);
-      return;
-    }
-    const stdoutChunks = [];
-    proc.stdout.on('data', (c) => stdoutChunks.push(c));
-    proc.stderr.on('data', () => { /* drain */ });
-    const timer = setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
-      resolve(false);
-    }, CLI_NUDGE_TIMEOUT_MS);
-    proc.on('error', () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-    proc.on('exit', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) { resolve(false); return; }
-      try {
-        const parsed = JSON.parse(Buffer.concat(stdoutChunks).toString('utf8'));
-        resolve(parsed && parsed.loggedIn === true);
-      } catch {
-        resolve(false);
-      }
-    });
-  });
+// 再ログイン案内に付ける補足。refresh token の失効 (invalid_grant) と、endpoint /
+// client_id の陳腐化 (invalid_client / invalid_request) はどちらも再ログインへ
+// 落ちるので、ログとメッセージで区別できるように原因を残す。
+function describeRefreshFailure(err) {
+  if (!err) return null;
+  const detail = parseOAuthErrorBody(err.body);
+  if (detail) return detail;
+  if (err.status) return `status ${err.status}`;
+  return null;
 }
 
-// Try every available avenue to obtain a usable access token. Returns the
-// (possibly-updated) credentials object on success, or the original
-// `credentials` if no avenue worked.
+// 期限切れや 401 からの回復を試みる。成功したら使える credentials を返し、
+// 再ログインが要る場合だけ claude_unauthorized を投げる。
 async function tryRecoverCredentials(credentials) {
-  // 1) Direct OAuth refresh via env-var-configured endpoint.
   try {
     return await refreshAccessToken(credentials);
   } catch (err) {
-    if (err.code !== 'claude_refresh_unconfigured'
-        && err.code !== 'claude_refresh_token_missing') {
-      throw err;
-    }
-    // fall through to CLI nudge
-  }
-
-  // 2) Spawn `claude auth status` — the CLI refreshes credentials.json
-  //    itself when the access token is expired and the refresh token is
-  //    still valid.
-  const nudged = await nudgeClaudeRefresh();
-  if (nudged) {
+    if (!isFatalRefreshError(err)) throw err;
+    // 他プロセス (CLI) が先に refresh していれば、手元の refresh token が
+    // 無効になっているだけで再ログインは要らない。更新後の値を使う。
     const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
     if (reread) return reread;
-    // CLI says we're logged in but the file hasn't changed — token is still
-    // valid (or CLI didn't refresh). Return the original credentials and let
-    // the caller decide what to do.
+    const detail = describeRefreshFailure(err);
+    throw makeError(
+      'claude_unauthorized',
+      `Anthropic から認証エラー (401)。\`claude login\` で再ログインしてください。${detail ? ` (refresh 失敗: ${detail})` : ''}`,
+    );
   }
-  return credentials;
 }
 
 async function fetch() {
   let credentials = await readCredentials();
 
+  // 期限切れのときだけ事前に refresh する。期限内なら usage を叩き、401 が
+  // 返ったときだけ回復に入る。
   if (shouldRefresh(credentials.oauth)) {
     credentials = await tryRecoverCredentials(credentials);
   }
 
-  const plan = extractPlanLabel(credentials.oauth);
-
   try {
     const usage = await fetchUsage(credentials.accessToken);
-    return { ...usage, plan };
+    return { ...usage, plan: extractPlanLabel(credentials.oauth) };
   } catch (err) {
     if (err.code !== 'claude_unauthorized') throw err;
 
-    // 1) Another process may have already refreshed in the meantime.
+    // 1) 他プロセス (CLI) が既に refresh 済みかもしれないので読み直して 1 回試す。
     const reread = await readFreshCredentialsIfChanged(credentials.accessToken);
     if (reread) {
       try {
@@ -497,34 +544,11 @@ async function fetch() {
       }
     }
 
-    // 2) Nudge the CLI to refresh.
-    const nudged = await nudgeClaudeRefresh();
-    if (nudged) {
-      const afterNudge = await readFreshCredentialsIfChanged(credentials.accessToken);
-      if (afterNudge) {
-        try {
-          const usage = await fetchUsage(afterNudge.accessToken);
-          return { ...usage, plan: extractPlanLabel(afterNudge.oauth) };
-        } catch (retryErr) {
-          if (retryErr.code !== 'claude_unauthorized') throw retryErr;
-        }
-      }
-    }
-
-    // 3) Last resort: direct OAuth refresh via env vars.
-    try {
-      const refreshed = await refreshAccessToken(credentials);
-      const usage = await fetchUsage(refreshed.accessToken);
-      return { ...usage, plan: extractPlanLabel(refreshed.oauth) };
-    } catch (refreshErr) {
-      if (refreshErr.code && refreshErr.code.startsWith('claude_refresh_')) {
-        throw makeError(
-          'claude_unauthorized',
-          'Anthropic から認証エラー (401)。`claude login` で再ログインしてください。',
-        );
-      }
-      throw refreshErr;
-    }
+    // 2) 直接 refresh する。再ログインが必要かどうかの判定は
+    //    tryRecoverCredentials に任せる。
+    const recovered = await tryRecoverCredentials(credentials);
+    const usage = await fetchUsage(recovered.accessToken);
+    return { ...usage, plan: extractPlanLabel(recovered.oauth) };
   }
 }
 
@@ -535,14 +559,18 @@ async function shutdown() {
 module.exports = {
   fetch,
   shutdown,
+  credentialsPath,
   _private: {
+    setTransport,
     mergeRefreshResponse,
     normalizeExpiresAt,
     shouldRefresh,
+    refreshConfig,
+    isFatalRefreshError,
+    describeRefreshFailure,
     parseBucket,
     parseWeeklyScoped,
     parseCredits,
     extractPlanLabel,
-    buildChildEnv,
   },
 };

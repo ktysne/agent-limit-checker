@@ -3,7 +3,6 @@
 const ERROR_HINTS = {
   claude_credentials_missing: '🔑 ボタンを押すと再ログインできます。完了すると自動で復帰します。',
   claude_unauthorized: 'OAuth トークンが無効です。🔑 ボタンから再ログインすると自動で復帰します。',
-  claude_refresh_unconfigured: '自動 refresh は未設定です。🔑 ボタンから再ログインすると自動で復帰します。',
   claude_refresh_token_missing: 'refresh token がありません。🔑 ボタンから再ログインすると自動で復帰します。',
   codex_cli_missing: 'PowerShell で `npm i -g @openai/codex` を実行してください。',
   codex_rpc_error: '🔑 ボタンを押すと再ログインできます。完了すると自動で復帰します。',

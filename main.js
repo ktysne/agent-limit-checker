@@ -2,7 +2,6 @@
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeTheme } = require('electron');
 const path = require('node:path');
-const os = require('node:os');
 const fsp = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 
@@ -51,10 +50,12 @@ const POPOVER_EDGE_MARGIN = 8;
 // Where the Claude CLI persists its OAuth credentials. After an interactive
 // `login`, the CLI rewrites the file below — we watch it so we can refresh
 // (and surface) the restored state without the user reopening the app or
-// pressing the reload button. Codex has one such file per account, so its path
-// comes from the account being logged in (Account.authFile) instead.
+// pressing the reload button. The path must be the one claudeProvider reads,
+// so it comes from the provider's own resolver (CLAUDE_CONFIG_DIR aware).
+// Codex has one such file per account, so its path comes from the account
+// being logged in (Account.authFile) instead.
 const CREDENTIAL_FILES = {
-  claude: path.join(os.homedir(), '.claude', '.credentials.json'),
+  claude: claudeProvider.credentialsPath(),
 };
 const LOGIN_WATCH_INTERVAL_MS = 1_500;
 const LOGIN_WATCH_TIMEOUT_MS = 5 * 60_000;
