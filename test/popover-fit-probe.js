@@ -19,6 +19,13 @@
 //                  the clamped renderer reports nothing, so only the retained
 //                  height can drive this.
 //
+// Every phase also asserts that the height requests SETTLE: after the loop has
+// had time to converge, an idle wait must add no further requests. The
+// fractional-DPI shortfall of setContentSize wobbles by a px or two between
+// nearby heights, which once made the loop alternate between two requests
+// forever (829 ↔ 838 at 125% with three Codex accounts) — a regression that
+// only shows up in this idle-count check.
+//
 // PROBE_DEBUG=1 prints every reported height, for diagnosing the loop.
 
 const path = require('node:path');
@@ -173,25 +180,37 @@ async function runCase({
     reportsAfterIdle: reportCount,
     after: null,
   };
+  // Measure the phase that follows a transition: let the loop converge, then
+  // record how many requests the transition cost and whether an idle wait adds
+  // any more (it must not — see the header comment on the 829 ↔ 838 loop).
+  const settleAfter = async (before) => {
+    await wait(700);
+    const settled = reportCount;
+    const m2 = await measure(win);
+    await wait(400);
+    return {
+      ...m2,
+      gap: m2.innerHeight - m2.container,
+      contentSize: win.getContentSize(),
+      reportsForTransition: settled - before,
+      reportsAfterIdle: reportCount - settled,
+    };
+  };
   if (raiseCeilingTo) {
     // The popover moved to a display with a taller work area. main.js re-applies
     // the retained height on the next show; do the same here.
+    const before = reportCount;
     maxHeight = raiseCeilingTo;
     win.setPosition(200, 0); // an unclamped window can outgrow the probe's start y
     reapplyHeight();
-    await wait(900);
-    const grown = await measure(win);
-    result.after = {
-      ...grown, gap: grown.innerHeight - grown.container, contentSize: win.getContentSize(),
-    };
+    result.after = await settleAfter(before);
   }
   if (closeSettingsAfter) {
     // Shrinking back under the ceiling must lift the clamp and hand the window
     // back to the normal fit-to-content loop.
+    const before = reportCount;
     await win.webContents.executeJavaScript("document.getElementById('settings-toggle').click()");
-    await wait(700);
-    const m2 = await measure(win);
-    result.after = { ...m2, gap: m2.innerHeight - m2.container, contentSize: win.getContentSize() };
+    result.after = await settleAfter(before);
   }
   win.destroy();
   win = null;
@@ -237,10 +256,15 @@ app.whenReady().then(async () => {
 
   // 3. Closing the settings panel brings the content back under the ceiling.
   const back = clamped.after;
-  console.log(`\n[unclamped] content=${back.container.toFixed(2)} innerHeight=${back.innerHeight} scrollPx=${back.scrollPx.toFixed(2)} gap=${back.gap.toFixed(2)} clampedClass=${back.clampedClass}`);
+  console.log(`\n[unclamped] reports=${back.reportsForTransition} (+${back.reportsAfterIdle} idle)  contentSize=${JSON.stringify(back.contentSize)}`);
+  console.log(`[unclamped] content=${back.container.toFixed(2)} innerHeight=${back.innerHeight} scrollPx=${back.scrollPx.toFixed(2)} gap=${back.gap.toFixed(2)} clampedClass=${back.clampedClass}`);
   pass = check('html.clamped cleared', !back.clampedClass) && pass;
   pass = check('no scrollbar again', back.scrollPx < 0.5) && pass;
   pass = check('snug fit again', back.gap >= -0.5 && back.gap <= 4) && pass;
+  // Three Codex accounts with the panel closed is the state that used to
+  // alternate between two heights forever at 125%.
+  pass = check('requests bounded while shrinking', back.reportsForTransition <= 10) && pass;
+  pass = check('requests settled', back.reportsAfterIdle === 0) && pass;
 
   // 4. The ceiling grows under a clamped popover (it moved to a taller display):
   //    the retained height must be re-applied, lifting the clamp.
@@ -248,13 +272,15 @@ app.whenReady().then(async () => {
     name: 'ceiling-raised', codexCount: 3, ceiling, openSettings: true, raiseCeilingTo: 10_000,
   });
   const grown = raised.after;
-  console.log(`\n[ceiling-raised] ceiling ${ceiling} → 10000  contentSize=${JSON.stringify(grown.contentSize)}`);
+  console.log(`\n[ceiling-raised] ceiling ${ceiling} → 10000 reports=${grown.reportsForTransition} (+${grown.reportsAfterIdle} idle)  contentSize=${JSON.stringify(grown.contentSize)}`);
   console.log(`[ceiling-raised] content=${grown.container.toFixed(2)} innerHeight=${grown.innerHeight} scrollPx=${grown.scrollPx.toFixed(2)} gap=${grown.gap.toFixed(2)} clampedClass=${grown.clampedClass}`);
   pass = check('was clamped before the ceiling rose', raised.clampedClass) && pass;
   pass = check('html.clamped cleared', !grown.clampedClass) && pass;
   pass = check('no scrollbar after the ceiling rose', grown.scrollPx < 0.5) && pass;
   pass = check('window grew past the old ceiling', grown.contentSize[1] > ceiling) && pass;
   pass = check('snug fit after the ceiling rose', grown.gap >= -0.5 && grown.gap <= 4) && pass;
+  pass = check('requests bounded after the ceiling rose', grown.reportsForTransition <= 10) && pass;
+  pass = check('requests settled', grown.reportsAfterIdle === 0) && pass;
 
   console.log(`\n${pass ? 'PASS' : 'FAIL'}`);
   app.exit(pass ? 0 : 1);

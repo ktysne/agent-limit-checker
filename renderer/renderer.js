@@ -364,18 +364,48 @@ async function saveNtfySettings(partial) {
 // Drive the window height from the actual rendered content so it fits with no
 // scrollbar and no empty gap. We can't just request `contentHeight`: on
 // fractional-DPI displays (125% / 150% / …) Electron's setContentSize lands a
-// few px short of what we ask, so a naive request still leaves the content
-// overflowing. Instead this is a self-correcting loop — it watches whether the
-// content actually overflows the viewport and grows the request until it
-// doesn't, then settles. Because it observes real overflow it needs no
-// per-DPI magic numbers.
+// few px short of what we ask, and the shortfall is not even constant — it
+// wobbles by a px or two between nearby heights as the device-pixel rounding
+// falls differently. So this is a self-correcting loop: it measures the
+// shortfall the window actually has (requested − viewport) and asks for
+// `content + shortfall`, growing on any overflow and shrinking only when the
+// gap is clearly bigger than the wobble. Because it observes the real
+// shortfall it needs no per-DPI magic numbers.
 let requestedHeight = 0;
 // True while the main process is holding the window at the display limit. The
 // content cannot fit, so `html.clamped` turns scrolling on and the loop below
 // stops asking for more height (every request would be clamped right back).
 let heightClamped = false;
 
-function syncWindowHeight() {
+// Upper bound on the DPI shortfall we believe. Measured values run from 5px
+// (200%) to 11px (100%); a reading outside [0, MAX] means the viewport is not
+// the result of our last request — the resize is still in flight — and acting
+// on it would send a wildly wrong height.
+const MAX_DPI_SHORTFALL = 24;
+// Empty space below the content that is worth a shrink request. Must exceed
+// the wobble of the shortfall between two nearby heights (≤2px at 125%) plus
+// the sub-pixel drift of the content (<1px), otherwise a grow of exactly the
+// observed overflow can land with a "gap" that triggers a shrink, which lands
+// short again, and the loop never settles. Anything under this stays as an
+// invisible sliver of padding.
+const SHRINK_SLACK = 4;
+// A window resize reaches us as a burst of resize events whose intermediate
+// viewports are not the final one (the frame is accounted for a beat later),
+// so a pass only runs once the viewport has held still for this long.
+const SETTLE_MS = 50;
+// A request that changes the height by 1px can land on the very same viewport
+// as the previous one (the device-pixel rounding swallows it), in which case no
+// resize event fires and nothing would re-run the loop. After every request a
+// one-shot recheck runs a pass that acts regardless of plausibility — by then
+// the resize has long landed — so the next pass can push further.
+const RECHECK_DELAY_MS = 120;
+let settleTimer = 0;
+let recheckTimer = 0;
+let forcePass = false;
+
+function evaluateWindowHeight() {
+  const force = forcePass;
+  forcePass = false;
   if (!window.api || typeof window.api.reportContentHeight !== 'function') return;
   const el = document.querySelector('.container');
   if (!el) return;
@@ -387,26 +417,56 @@ function syncWindowHeight() {
   // Still overflowing at the display limit: the user scrolls instead, and we
   // send nothing so the loop cannot spin against a window that cannot grow.
   if (heightClamped && overflow > 0) return;
+  // How far short of our last request the window really landed (once it has).
+  // While clamped the window is known to sit at the ceiling, far below the
+  // request, so that reading is the real one and the plausibility gate is off.
+  const rawShortfall = requestedHeight - viewport;
+  const landed = heightClamped || force
+    || (rawShortfall >= 0 && rawShortfall <= MAX_DPI_SHORTFALL);
 
   let target = requestedHeight;
-  if (content > requestedHeight && content > viewport) {
-    target = content;                    // first paint, or content grew past us
-  } else if (overflow > 0) {
-    target = requestedHeight + overflow; // window too short — absorb the DPI deficit
-  } else if (viewport - content >= 2) {
-    target = content;                    // window taller than content — close the gap
+  if (requestedHeight === 0) {
+    target = content;                    // first paint: no shortfall measured yet
+  } else if (!landed) {
+    return;                              // resize still in flight; the recheck re-runs us
+  } else if (overflow > 0 || viewport - content >= SHRINK_SLACK) {
+    // Requesting `content + shortfall` is what makes the viewport come out at
+    // `content`. The cap only matters when the gate was bypassed (clamped, or
+    // the forced recheck) and the reading may not reflect a landed request.
+    const shortfall = Math.min(MAX_DPI_SHORTFALL, Math.max(0, rawShortfall));
+    target = content + shortfall;
+    // Growing must always make progress: when the shortfall wobbles up by a px
+    // the exact request is what we already asked for, and once landed the
+    // observed overflow is exactly how much further the window has to go.
+    if (overflow > 0) target = Math.max(target, requestedHeight + overflow);
   }
   target = Math.ceil(Math.max(1, target));
   if (target !== requestedHeight) {
     requestedHeight = target;
     window.api.reportContentHeight(target);
+    clearTimeout(recheckTimer);
+    recheckTimer = setTimeout(() => { forcePass = true; evaluateWindowHeight(); }, RECHECK_DELAY_MS);
   }
+}
+
+// Entry point for every trigger. The first paint is measured right away (the
+// window is still at its placeholder size and nothing is in flight); every
+// later trigger waits for the viewport to settle so a burst of resize events
+// is evaluated once, on its final value.
+function syncWindowHeight() {
+  if (requestedHeight === 0) {
+    evaluateWindowHeight();
+    return;
+  }
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(evaluateWindowHeight, SETTLE_MS);
 }
 
 // Re-sync whenever the content reflows (data arrives, an error box appears, …)
 // or the viewport changes (our own resize lands, or the window moves to a
-// display with a different scale factor). The monotonic grow/shrink with a 2px
-// hysteresis converges in a couple of frames without oscillating.
+// display with a different scale factor). Growing by the observed shortfall and
+// shrinking only past SHRINK_SLACK converges in a couple of frames without
+// oscillating.
 function watchContentHeight() {
   const el = document.querySelector('.container');
   if (!el) return;
