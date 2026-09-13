@@ -15,7 +15,7 @@
 //   node tools/cross-review.js claude --base develop  # 比較先ブランチを変更
 //   node tools/cross-review.js state            # この枝の往復回数・直前レビュー SHA・非対応指摘を表示
 //   node tools/cross-review.js dismiss "<要約>" # 非対応と判断した指摘を記録し、以降再指摘させない
-//   node tools/cross-review.js comment --round 1  # 保存済みレビュー出力と判断ファイルから PR コメント本文を生成
+//   node tools/cross-review.js comment --round 1  # 判断ファイルと検証出力から PR コメント本文を生成
 //   npm run review:codex                        # = node tools/cross-review.js codex
 //   npm run review:codex:fix                    # = node tools/cross-review.js codex --fix
 //   npm run review:claude -- --uncommitted      # npm 経由で追加引数を渡す (-- が必要)
@@ -70,12 +70,13 @@
 // - 既定 base は「前回レビュー SHA → PR の base ブランチ → origin/main → ローカル main」の順で
 //   解決する。前者ほど差分が小さく、かつ人の指定なしで決まる情報だから。決めた base と解決方法は
 //   差分サイズと同じ stderr 行に必ず出し、stale な比較に気づけるようにする。
-// - 往復を記録できたときは、レビュアーの出力 (subagent 経路は渡したプロンプト) と実行経路の
-//   メタ情報を `.cross-review/round-<N>-*` へ保存する。PR コメントの定型はレビュー出力、主セッションが
-//   書く判断ファイル、検証出力の 3 つからの機械的な変換なので、材料を会話の外へ残しておく。
-//   保存の失敗はレビューを失敗にしない (出力は端末に出ているため)。整形は `comment` サブコマンドが
-//   行い、投稿はしない。判断内容は主セッションが書くもので、CLI が PR へ直接書くと誤投稿の取り消しが
-//   難しいため、`gh pr comment --body-file` のコマンド例を出すに留める。
+// - 往復を記録できたときは、開始時のブランチ名を安全化したディレクトリへ、レビュアーの出力
+//   (subagent 経路は渡したプロンプト) と実行経路のメタ情報を保存する。PR コメントの定型は
+//   主セッションが書く判断ファイルと検証出力からの機械的な変換なので、材料を会話の外へ残しておく。
+//   保存の失敗はレビューを失敗にしない (出力は端末に出ているため)。`comment` は判断ファイルが
+//   揃ったときだけ本文を生成し、既定では `gh pr comment --body-file` のコマンド例を出す。
+//   `--post` 指定時は生成本文をいったん保存してから同じメモリ本文を標準入力で投稿し、
+//   投稿に失敗した場合は保存した本文を削除する。
 // - レビュー実行前に PR の有無を `gh pr view` で確かめ、無いと分かったときだけ警告する。
 //   PR コメントを共有ログにする運用なので、PR 未作成のまま往復を始めると記録が揮発する。
 //   gh 不在やネットワーク断は「分からない」に倒して黙って続行する (リモートを持たない
@@ -94,6 +95,7 @@
 'use strict';
 
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -122,11 +124,6 @@ const REVIEW_DIR_NAME = '.cross-review';
 // PR コメントに載せる検証出力の行数上限 (末尾から数える)。長いテスト出力で
 // コメントが埋まらないようにするための上限で、切り詰めたときはその旨を本文に書く。
 const VERIFY_TAIL_LINES = 200;
-
-// PR コメントに載せるレビュー出力の文字数上限 (末尾から数える)。GitHub のコメント上限は
-// 65,536 文字なので、判断本文と検証出力の余地を残してここで止める。超えた分は保存ファイル
-// (`.cross-review/round-<N>-<reviewer>.md`) にあるので、summary にその旨とパスを書く。
-const COMMENT_REVIEW_LIMIT = 40000;
 
 // 生成したコメント全体がこの文字数を超えたら警告する。GitHub の上限 65,536 文字に対する
 // 余裕分で、投稿すると弾かれる可能性を知らせるだけ (投稿は利用者が行うので実行は止めない)。
@@ -414,7 +411,7 @@ function joinReviewerNotes(instructions, dismissedSection) {
 const USAGE = [
   'Claude ↔ Codex 相互レビュー CLI ブリッジ',
   '',
-  '使い方: node tools/cross-review.js <codex|claude|subagent|state|dismiss|comment> [options]',
+  '使い方: node tools/cross-review.js <codex|claude|subagent|state|dismiss|comment|artifacts> [options]',
   '',
   'レビュアー:',
   '  codex      codex スタンドアロン CLI でレビュー (既定 read-only、--fix で workspace-write)',
@@ -434,9 +431,11 @@ const USAGE = [
   '                    「再指摘しない」節として添えられる。同じ要約は重複追加しない)',
   '',
   'サブコマンド (PR コメントの生成):',
-  '  comment --round <N>   保存済みのレビュー出力 (.cross-review/round-<N>-<reviewer>.md)、判断ファイル',
+  '  comment --round <N>   ブランチ別 .cross-review/branch-<slug>-<hash>/ のメタ情報、判断ファイル',
   '                        (round-<N>-triage.md)、検証出力を定型に整形し、gh pr comment --body-file 用の',
-  '                        ファイルを書き出す (投稿はしない。コマンド例は stderr に出る)',
+  '                        ファイルを書き出す (既定では投稿しない。コマンド例は stderr に出る)',
+  '                        --post <PR番号> を付けると生成本文を gh pr comment へ直接投稿する',
+  '  artifacts --clean-legacy  .cross-review 直下に残る旧形式の出力だけを削除する',
   '',
   'options:',
   '  --fix                 修正まで依頼 (codex: workspace-write で直接編集 / subagent: FIX 指示付きで出力。claude CLI 経路は非対応)',
@@ -459,9 +458,11 @@ const USAGE = [
   '  --no-codex-agent      bridge を使わず codex を直接起動する (従来の起動方法)',
   '  --no-fallback         Codex が利用上限でも subagent 代替へ切り替えず、そのまま失敗終了する',
   '  --no-pr-check         レビュー実行前の PR 存在確認 (gh pr view) を省く',
-  '  --reviewer <name>     comment: 対象のレビュアーを明示 (省略時は .cross-review/round-<N>-*.json から自動選択)',
+  '  --reviewer <name>     comment: 対象のレビュアーを明示 (省略時はブランチ別ディレクトリのメタ情報から自動選択)',
   '  --verify <path>       comment: 検証コマンドの出力ファイルを「確認内容」節へ入れる (末尾 200 行まで)',
-  '  --out <path>          comment: 生成した本文の書き出し先 (既定 .cross-review/round-<N>-comment.md)',
+  '  --out <path>          comment: 生成した本文の書き出し先 (既定はブランチ別ディレクトリの round-<N>-comment.md)',
+  '  --post <N>            comment: 生成本文を gh pr comment <N> --body-file - で投稿する (1 以上の整数)',
+  '  --clean-legacy        artifacts: .cross-review 直下の旧形式出力を削除する',
   '  --fallback-prompt <path> 利用上限時に出力する代替プロンプトの書き出し先',
   '                        (既定: OS の一時ディレクトリ/cross-review-fallback-<pid>.md)',
   '  -h, --help            このヘルプを表示',
@@ -484,10 +485,11 @@ const USAGE = [
   '  環境変数 CROSS_REVIEW_NO_FETCH=1 で fetch と gh の呼び出しを省きます (オフライン作業向け)。',
   '状態ファイル: <スクリプト>/../.cross-review-state.json にブランチ単位で往復回数・直前レビュー SHA・',
   '  非対応と判断した指摘を記録します (git 管理外を想定。--no-state で無効化)。',
-  'レビュー出力: 往復を記録できたときだけ <スクリプト>/../.cross-review/ へ保存します',
+  'レビュー出力: 往復を記録できたときだけ、開始時のブランチ名を安全化した',
+  '  <スクリプト>/../.cross-review/branch-<slug>-<hash>/ へ保存します',
   '  (codex / claude はレビュアーの出力を round-<N>-<reviewer>.md、subagent は渡したプロンプトを',
   '   round-<N>-<reviewer>-prompt.md、いずれも実行経路と base を round-<N>-<reviewer>.json に記録)。',
-  '  subagent 経路はサブエージェントの出力を round-<N>-subagent.md へ貼ってから comment を使います。',
+  '  旧平置き出力は自動で読みません。必要なら artifacts --clean-legacy で削除できます。',
   'PR の確認: レビュー実行前に gh pr view で PR の有無を調べ、無いと分かったときだけ警告します',
   '  (実行は止めません。--no-pr-check と CROSS_REVIEW_NO_FETCH=1 で省略)。',
   '',
@@ -513,6 +515,10 @@ const USAGE = [
   '      (非対応と判断した指摘を記録し、以降のレビューで再指摘させない)',
   '  node tools/cross-review.js comment --round 1 --verify verify.log',
   '      (1 往復目の PR コメント本文を生成する。生成後 gh pr comment --body-file で投稿する)',
+  '  node tools/cross-review.js comment --round 1 --post 42',
+  '      (生成した本文を PR #42 へ標準入力経由で投稿する)',
+  '  node tools/cross-review.js artifacts --clean-legacy',
+  '      (旧形式の平置き出力を削除する)',
 ].join('\n');
 
 // 非負整数として解釈できれば数値を、できなければ null を返す。
@@ -537,7 +543,7 @@ function parseArgs(argv) {
   const out = {
     // 実行するサブコマンド。'review' はレビュアー (codex / claude / subagent) の実行、
     // 'state' は状態ファイルの表示と初期化、'dismiss' は非対応と判断した指摘の記録、
-    // 'comment' は保存済みレビュー出力と判断ファイルからの PR コメント本文の生成。
+    // 'comment' は保存済みメタ情報、判断ファイル、検証出力から PR コメント本文を生成する。
     command: 'review',
     reviewer: null,
     dismissText: null, // dismiss の要約 (command === 'dismiss' のときだけ使う)
@@ -563,11 +569,13 @@ function parseArgs(argv) {
     fallbackPromptPath: null, // --fallback-prompt の書き出し先 (未指定なら一時ディレクトリ)
     noPrCheck: false, // --no-pr-check でレビュー実行前の PR 存在確認を省く
     // comment サブコマンド用。round は対象の往復番号、reviewerName は `--reviewer`
-    // (省略時は .cross-review/round-<N>-*.json から自動で選ぶ)。
+    // (省略時はブランチ別ディレクトリのメタ情報から自動で選ぶ)。
     round: null,
     reviewerName: null,
     verifyPath: null, // --verify の検証出力ファイル
-    outPath: null, // --out の書き出し先 (未指定は .cross-review/round-<N>-comment.md)
+    outPath: null, // --out の書き出し先 (未指定はブランチ別ディレクトリの round-<N>-comment.md)
+    postNumber: null, // --post の投稿先 PR 番号 (comment 専用)
+    cleanLegacy: false, // artifacts --clean-legacy (旧平置き出力の削除)
     help: false,
     error: null,
   };
@@ -633,6 +641,18 @@ function parseArgs(argv) {
         out.outPath = v;
         if (a === '--out') i++;
       }
+    } else if (a === '--post' || a.startsWith('--post=')) {
+      const v = a === '--post' ? args[i + 1] : a.slice('--post='.length);
+      const n = parseNonNegativeInt(v);
+      if (n == null || n < 1) {
+        out.error = '--post には 1 以上の整数を指定してください';
+        if (a === '--post' && v != null && !v.startsWith('--')) i++;
+      } else {
+        out.postNumber = n;
+        if (a === '--post') i++;
+      }
+    } else if (a === '--clean-legacy') {
+      out.cleanLegacy = true;
     } else if (a === '--codex-agent') {
       const v = args[i + 1];
       if (!v || v.startsWith('-')) {
@@ -736,12 +756,14 @@ function parseArgs(argv) {
     }
   }
   if (!out.help && !out.error && rest[0] === 'comment') {
-    // PR コメント本文の生成。保存済みのレビュー出力と判断ファイルを読むだけで、
+    // PR コメント本文の生成。保存済みのメタ情報と判断ファイルを読むだけで、
     // レビュアーの起動も状態ファイルの更新も行わない。
     out.command = 'comment';
     if (out.noState) {
       // comment は状態ファイルを読み書きしない。指定しても効かないので黙って無視しない。
       out.error = '--no-state は state / dismiss / comment サブコマンドとは併用できません';
+    } else if (out.cleanLegacy) {
+      out.error = '--clean-legacy は artifacts サブコマンドでのみ使えます';
     } else if (out.reset) {
       out.error = '--reset は state サブコマンドでのみ使えます';
     } else if (out.mark) {
@@ -749,7 +771,7 @@ function parseArgs(argv) {
     } else if (out.round == null) {
       out.error = 'comment には --round <N> が必要です (例: comment --round 1)';
     }
-  } else if (!out.help && !out.error && (rest[0] === 'state' || rest[0] === 'dismiss')) {
+  } else if (!out.help && !out.error && (rest[0] === 'state' || rest[0] === 'dismiss' || rest[0] === 'artifacts')) {
     // レビュアー以外のサブコマンド。状態ファイルだけを扱うので、レビュアーは決めない。
     out.command = rest[0];
     if (out.noState) {
@@ -767,6 +789,21 @@ function parseArgs(argv) {
         } else {
           out.dismissText = text;
         }
+      }
+    } else if (out.command === 'artifacts') {
+      const commentOnly = [
+        out.round != null ? '--round' : null,
+        out.reviewerName != null ? '--reviewer' : null,
+        out.verifyPath != null ? '--verify' : null,
+        out.outPath != null ? '--out' : null,
+        out.postNumber != null ? '--post' : null,
+      ].filter(Boolean);
+      if (commentOnly.length > 0) {
+        out.error = `${commentOnly.join(' / ')} は comment サブコマンドでのみ使えます`;
+      } else if (!out.cleanLegacy) {
+        out.error = 'artifacts には --clean-legacy が必要です';
+      } else if (out.reset || out.mark) {
+        out.error = '--reset / --mark は artifacts サブコマンドでは使えません';
       }
     } else if (out.reset && out.mark) {
       // 記録を消すのと往復を 1 進めるのは相反する操作なので、どちらの意図か決められない。
@@ -804,9 +841,12 @@ function parseArgs(argv) {
       out.reviewerName != null ? '--reviewer' : null,
       out.verifyPath != null ? '--verify' : null,
       out.outPath != null ? '--out' : null,
+      out.postNumber != null ? '--post' : null,
     ].filter(Boolean);
     if (given.length > 0) {
       out.error = `${given.join(' / ')} は comment サブコマンドでのみ使えます`;
+    } else if (out.cleanLegacy && out.command !== 'artifacts') {
+      out.error = '--clean-legacy は artifacts サブコマンドでのみ使えます';
     }
   }
   return out;
@@ -851,33 +891,49 @@ function defaultGitRunner(args, opts) {
   return res.stdout || '';
 }
 
-// gh CLI を実行して結果を返す。戻り値は { status, stdout, stderr }、起動自体ができないとき
-// (gh 不在、タイムアウト) は null。非ゼロ終了でも null にせず結果を返すのは、gh が
-// 「PR が無い」ことも非ゼロ終了で知らせるため。この 2 つは扱いが違う (readPrInfo 参照)。
-// git と同じく 10 秒でタイムアウトさせる。
+// gh CLI を実行して結果を返す。非ゼロ終了や起動エラーも結果に残すのは、PR 不在、
+// 認証エラー、タイムアウトを呼び出し側が区別し、書き込みの再実行を誤らないため。
+// 読み取りは既定 10 秒、投稿などの書き込みは呼び出し側が timeout を延長する。
 // Windows では gh が .cmd shim のことがあるため、レビュアー CLI と同じ解決を通す。
-function defaultGhRunner(args) {
+function defaultGhRunner(args, options = {}) {
   const resolved = resolveReviewerCommandForSpawn('gh');
+  const input = options.input == null ? options.stdin : options.input;
+  const timeout = Number.isFinite(options.timeout) && options.timeout > 0 ? options.timeout : 10000;
+  const maxBuffer = Number.isFinite(options.maxBuffer) && options.maxBuffer > 0
+    ? options.maxBuffer
+    : 1024 * 1024;
   const res = spawnSync(resolved.cmd, args, {
     encoding: 'utf8',
-    timeout: 10000,
-    maxBuffer: 1024 * 1024,
+    timeout,
+    maxBuffer,
     shell: resolved.shell,
+    ...(input == null ? {} : { input: String(input) }),
   });
-  if (res.error || res.status == null) return null;
-  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
+  const error = res.error
+    ? `${res.error.code ? `${res.error.code}: ` : ''}${res.error.message || 'gh execution error'}`
+    : (res.signal ? `gh がシグナル ${res.signal} で終了しました` : '');
+  return {
+    status: Number.isInteger(res.status) ? res.status : null,
+    stdout: res.stdout || '',
+    stderr: res.stderr || '',
+    error,
+  };
 }
 
-// ghRun の戻り値を { status, stdout, stderr } に正規化する純粋関数。
-// 文字列を返す実装 (テストの簡易スタブなど) は「成功して stdout を返した」とみなす。
+// ghRun の戻り値を { status, stdout, stderr, error } に正規化する純粋関数。
+// 文字列と error の無い status 省略オブジェクトは、既存スタブとの互換性のため成功とみなす。
+// 起動エラーやシグナル終了では status を null のまま残し、成功へ変換しない。
 function normalizeGhResult(res) {
   if (res == null) return null;
-  if (typeof res === 'string') return { status: 0, stdout: res, stderr: '' };
+  if (typeof res === 'string') return { status: 0, stdout: res, stderr: '', error: '' };
   if (typeof res !== 'object') return null;
+  const error = String(res.error == null ? '' : res.error);
+  const hasStatus = Object.prototype.hasOwnProperty.call(res, 'status');
   return {
-    status: Number.isInteger(res.status) ? res.status : 0,
+    status: Number.isInteger(res.status) ? res.status : (!hasStatus && !error ? 0 : null),
     stdout: String(res.stdout == null ? '' : res.stdout),
     stderr: String(res.stderr == null ? '' : res.stderr),
+    error,
   };
 }
 
@@ -1447,9 +1503,31 @@ function resolveReviewDir(deps = {}) {
   return path.join(scriptDir, '..', REVIEW_DIR_NAME);
 }
 
+// ブランチ名をディレクトリ名へ安全に変換する。スラッシュなどはハイフンへ置換し、
+// 元の UTF-8 名からハッシュを付けることで、置換後や大文字小文字の衝突を分離する。
+// slug は読みやすさのため 64 文字に制限するが、ハッシュは必ず残す。
+function safeBranchDirName(branch) {
+  const original = String(branch == null ? '' : branch);
+  let slug = original
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .slice(0, 64)
+    .replace(/^[.-]+|[.-]+$/g, '');
+  if (!slug) slug = 'branch';
+  const hash = crypto.createHash('sha256').update(original, 'utf8').digest('hex').slice(0, 16);
+  return `branch-${slug}-${hash}`;
+}
+
+// ブランチ単位のレビュー出力先。resolveReviewDir はリポジトリ直下のルートを返し、
+// 生成物だけをこの下へ分けることで、別ブランチの同じ往復番号を上書きしない。
+function resolveBranchReviewDir(branch, deps = {}) {
+  return path.join(resolveReviewDir(deps), safeBranchDirName(branch));
+}
+
 // 往復 N とレビュアー名から、`.cross-review/` に置くファイル名一式を返す純粋関数。
 // 保存側 (runReview) と読み出し側 (runCommentCommand)、ドキュメントで名前がずれないよう 1 か所で決める。
-//   - review: レビュアーの出力全文 (subagent 経路は主セッションが貼る)
+//   - review: レビュアーの出力全文 (subagent 経路は主セッションが任意で貼る)
 //   - prompt: subagent へ渡したプロンプト (subagent 経路のみ保存する)
 //   - meta:   実行経路や base を記録する JSON
 //   - triage: 主セッションが書く判断ファイル (指摘ごとの裏取りと対応)
@@ -1477,10 +1555,14 @@ function defaultReviewFileWriter(filePath, body) {
 // 保存の失敗はレビュー自体の失敗にしない。レビュアーの出力は端末に出ているので、
 // 書けなかったことを警告するに留める。
 // 戻り値は書いたパス ({ bodyPath, metaPath })、書けなければ null。
-function saveRoundArtifacts({ round, reviewer, body, bodyName, meta }, deps = {}) {
+function saveRoundArtifacts({ branch, round, reviewer, body, bodyName, meta }, deps = {}) {
   const writeReviewFile = deps.writeReviewFile || defaultReviewFileWriter;
   const warn = deps.warn || ((m) => process.stderr.write(m));
-  const dir = resolveReviewDir(deps);
+  if (branch == null || String(branch).trim() === '') {
+    warn('[cross-review] ブランチ名を取得できないためレビュー出力を保存できません。\n');
+    return null;
+  }
+  const dir = resolveBranchReviewDir(branch, deps);
   const names = roundFileNames(round, reviewer);
   const bodyPath = path.join(dir, bodyName || names.review);
   const metaPath = path.join(dir, names.meta);
@@ -1537,7 +1619,8 @@ function fenceFor(text) {
 }
 
 // メタ情報 (round-<N>-<reviewer>.json) を PR コメント冒頭の 1 行にまとめる純粋関数。
-// メタが無い / 壊れているときも本文生成は止めず、「不明」と書く。
+// runCommentCommand は入力の欠落や JSON 不正を先に失敗扱いにするが、既存の呼び出し元が
+// この純粋関数だけを使う場合は、欠落した項目を「不明」として安全に表示する。
 function buildMetaSummary(meta) {
   if (!meta || typeof meta !== 'object') {
     return '実行経路: 不明 / base: 不明 / 差分サイズ: 不明 (メタ情報が読めませんでした)';
@@ -1553,32 +1636,13 @@ function buildMetaSummary(meta) {
   return `実行経路: ${via} / ${scope} / 差分サイズ: ${size}`;
 }
 
-// レビュー出力の節 (<details> の summary) に書く文言を決める純粋関数。
-// 「全文」と書けるのは、コメントへ載せる分を切っておらず、保存時にも切り詰めていないときだけ。
-// 載せない分がある場合は、どこを見れば残りがあるかが分かるよう保存ファイル名を添える。
-//   - コメント側の切り詰め: reviewBody が COMMENT_REVIEW_LIMIT を超えている
-//   - 保存側の切り詰め:     メタの outputTruncated (spawnReviewer が上限で先頭を捨てた)
-function reviewSectionSummary(round, reviewer, meta, reviewBody) {
-  const commentTruncated = String(reviewBody == null ? '' : reviewBody).length > COMMENT_REVIEW_LIMIT;
-  const savedTruncated = !!(meta && typeof meta === 'object' && meta.outputTruncated);
-  if (!commentTruncated && !savedTruncated) return 'レビュー出力（全文）';
-  const file = `\`${REVIEW_DIR_NAME}/${roundFileNames(round, reviewer).review}\``;
-  const notes = [];
-  if (commentTruncated) notes.push(`末尾 ${groupDigits(COMMENT_REVIEW_LIMIT)} 文字`);
-  if (savedTruncated) notes.push('保存時に上限超過で先頭を切り詰め済みのため全文ではない');
-  notes.push(savedTruncated ? `保存ファイルは ${file}` : `全文は ${file}`);
-  return `レビュー出力（${notes.join('。')}）`;
-}
-
 // 1 往復分の PR コメント本文を組み立てる純粋関数 (I/O は持たない)。
 //   - round / reviewer: 見出しに使う往復番号とレビュアー。
 //   - meta:    round-<N>-<reviewer>.json の内容 (無ければ null)。
 //   - triage:  判断ファイルの本文 (無ければ null。指摘の節は空にして、その旨を書く)。
 //   - verify:  検証コマンドの出力 (無ければ節ごと省く)。長ければ末尾 VERIFY_TAIL_LINES 行に切る。
-//   - review:  レビュアーの出力 (details で折りたたむ)。長ければ末尾 COMMENT_REVIEW_LIMIT
-//              文字に切り、summary に切り詰めた旨と保存ファイル名を書く (reviewSectionSummary)。
 // 見出しは運用で使ってきた「## クロスレビュー N 往復目: <レビュアー> の指摘と対応」に合わせる。
-function buildRoundComment({ round, reviewer, meta, triage, verify, review } = {}) {
+function buildRoundComment({ round, reviewer, meta, triage, verify } = {}) {
   const parts = [
     `## クロスレビュー ${round} 往復目: ${reviewerDisplayName(reviewer)} の指摘と対応`,
     '',
@@ -1602,14 +1666,6 @@ function buildRoundComment({ round, reviewer, meta, triage, verify, review } = {
     const fence = fenceFor(verifyBody);
     parts.push(`${fence}text`, shown.join('\n'), fence, '');
   }
-  const reviewBody = review == null ? '' : String(review).replace(/\s+$/, '');
-  parts.push(
-    `<details><summary>${reviewSectionSummary(round, reviewer, meta, reviewBody)}</summary>`,
-    '',
-    tailChars(reviewBody, COMMENT_REVIEW_LIMIT),
-    '',
-    '</details>',
-  );
   return `${parts.join('\n')}\n`;
 }
 
@@ -2195,7 +2251,7 @@ function runReview(opts, deps = {}) {
   // レビューを終えた利用者が `state --mark` で行う。
   // 1 実行につき最大 1 回 (bridge のやり直しを 2 往復と数えない)。
   // 戻り値は記録できた往復番号 (記録しなかったときは null)。レビュー出力の保存先
-  // `.cross-review/round-<N>-<reviewer>.md` の N に使うので、記録と保存の番号がずれない。
+  // ブランチ別ディレクトリの round-<N>-<reviewer>.md の N に使うので、記録と保存の番号がずれない。
   let roundRecorded = false;
   const recordRound = () => {
     if (roundRecorded) return null;
@@ -2223,11 +2279,12 @@ function runReview(opts, deps = {}) {
     if (round == null) return;
     const names = roundFileNames(round, opts.reviewer);
     // 保持量の上限で先頭を捨てていたら、保存本文の先頭に注記を入れ、メタにも印を残す。
-    // 保存ファイルは PR コメントへ転載されるので、本文だけを見ても全文でないと分かるようにし、
-    // メタの印は `comment` が summary へ反映する (reviewSectionSummary)。
+    // 保存ファイルの先頭に注記を入れ、保存ファイルだけを見ても全文でないと分かるようにする。
+    // outputTruncated は保存ファイル先頭の注記に対応するメタ情報で、`comment` では参照しない。
     // 切り詰めていないときはキーごと書かない (無ければ全文、という読み方を保つ)。
     const text = truncated ? `${OUTPUT_TRUNCATED_NOTICE}\n\n${String(body == null ? '' : body)}` : body;
     saveRoundArtifacts({
+      branch,
       round,
       reviewer: opts.reviewer,
       body: text,
@@ -2259,8 +2316,8 @@ function runReview(opts, deps = {}) {
     // 通知は stderr に分けて、stdout を「そのまま客観サブエージェントへ渡せるプロンプト」に保つ。
     writeErr(inv.notice);
     writeOut(prompt + '\n');
-    // 保存するのは「渡したプロンプト」。レビュー結果はサブエージェントから戻るので、
-    // 主セッションがその出力を round-<N>-subagent.md へ貼ってから `comment` を使う。
+    // 保存するのは「渡したプロンプト」。レビュー結果を round-<N>-subagent.md へ貼る場合は
+    // ローカルの記録として残すためで、`comment` はそのファイルを読まない。
     saveRound(recordRound(), { body: prompt, isPrompt: true, via: 'subagent' });
     return null;
   }
@@ -2421,30 +2478,136 @@ function detectRoundReviewers(dir, round, deps = {}) {
   return found.sort();
 }
 
-// `comment --round <N>` サブコマンド。保存済みのレビュー出力、主セッションが書いた判断ファイル、
+// 旧形式の平置き出力に一致するファイル名だけを判定する。正の往復番号を要求し、
+// ディレクトリ名や別用途のファイル名は対象にしない。
+function isLegacyArtifactName(name) {
+  const matched = /^round-(\d+)-.+\.(?:md|json)$/.exec(String(name));
+  if (!matched) return false;
+  const round = parseNonNegativeInt(matched[1]);
+  return round != null && round > 0;
+}
+
+// `artifacts --clean-legacy` は移行時に残った平置きファイルだけを掃除する。
+// ブランチ別ディレクトリへは再帰せず、対象外のファイルとディレクトリを残す。
+function runArtifactsCommand(opts, deps = {}) {
+  const writeOut = deps.out || ((s) => process.stdout.write(s));
+  const writeErr = deps.err || ((s) => process.stderr.write(s));
+  const dir = resolveReviewDir(deps);
+  const readdir = deps.readdir || ((p, options) => fs.readdirSync(p, options));
+  const removeFile = deps.removeFile || deps.unlinkFile || deps.unlink || deps.rm || ((p) => fs.unlinkSync(p));
+  let entries;
+  try {
+    entries = readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    writeErr(`[cross-review] 旧形式の出力一覧を読めません: ${dir} (${(err && err.message) || 'read error'})\n`);
+    process.exitCode = 1;
+    return null;
+  }
+  const deleted = [];
+  let failed = false;
+  for (const entry of entries || []) {
+    const name = typeof entry === 'string' ? entry : entry && entry.name;
+    if (!isLegacyArtifactName(name)) continue;
+    const target = path.join(dir, String(name));
+    let isFile = true;
+    if (entry && typeof entry.isFile === 'function') {
+      try {
+        isFile = entry.isFile();
+      } catch (err) {
+        writeErr(`[cross-review] 旧形式の出力を確認できません: ${target} (${(err && err.message) || 'stat error'})\n`);
+        failed = true;
+        continue;
+      }
+    } else if (typeof deps.isFile === 'function') {
+      try {
+        isFile = !!deps.isFile(target);
+      } catch (err) {
+        writeErr(`[cross-review] 旧形式の出力を確認できません: ${target} (${(err && err.message) || 'stat error'})\n`);
+        failed = true;
+        continue;
+      }
+    } else if (typeof deps.stat === 'function') {
+      try {
+        const stat = deps.stat(target);
+        isFile = !!(stat && typeof stat.isFile === 'function' && stat.isFile());
+      } catch (err) {
+        writeErr(`[cross-review] 旧形式の出力を確認できません: ${target} (${(err && err.message) || 'stat error'})\n`);
+        failed = true;
+        continue;
+      }
+    }
+    if (!isFile) continue;
+    try {
+      removeFile(target);
+      deleted.push(target);
+      writeOut(`${target}\n`);
+    } catch (err) {
+      writeErr(`[cross-review] 旧形式の出力を削除できません: ${target} (${(err && err.message) || 'delete error'})\n`);
+      failed = true;
+    }
+  }
+  if (failed) process.exitCode = 1;
+  return deleted;
+}
+
+// 外部呼び出しからも、オプションを組み立てず旧平置き掃除を実行できる入口を提供する。
+function cleanLegacyArtifacts(deps = {}) {
+  return runArtifactsCommand({ cleanLegacy: true }, deps);
+}
+
+// `comment --round <N>` サブコマンド。保存済みのメタ情報、主セッションが書いた判断ファイル、
 // 検証出力を定型に整形し、`gh pr comment --body-file` へ渡すファイルを書き出す。
-// 投稿はしない。判断内容は主セッションが書くものなので、CLI が PR へ直接書くと誤投稿の
-// 取り消しが難しいため。コマンド例だけを stderr に出す。
+// `--post` を付けたときは本文を先に保存してから gh へ投稿し、失敗時に保存本文を削除する。
 // deps で出力、ファイル読み書き、gh の呼び出しを差し替えられる (runReview と同じ流儀)。
 function runCommentCommand(opts, deps = {}) {
   const writeErr = deps.err || ((s) => process.stderr.write(s));
+  const gitRun = deps.gitRun || defaultGitRunner;
   const exists = deps.exists || ((p) => fs.existsSync(p));
   const readFile = deps.readFile || ((p) => fs.readFileSync(p, 'utf8'));
   const writeReviewFile = deps.writeReviewFile || defaultReviewFileWriter;
-  const dir = resolveReviewDir(deps);
   const round = opts.round;
-  const fail = (message) => {
-    writeErr(message);
+  let branch;
+  try {
+    branch = currentBranchName(gitRun);
+  } catch {
+    branch = null;
+  }
+  if (!branch) {
+    writeErr('[cross-review] 現在のブランチ名を取得できません (git リポジトリの中で実行してください)。\n');
     process.exitCode = 1;
     return null;
-  };
-  const readIfPresent = (filePath) => {
+  }
+  const dir = resolveBranchReviewDir(branch, deps);
+  const outPath = opts.outPath || path.join(dir, roundFileNames(round, '').comment);
+  const usesDefaultOut = !opts.outPath;
+  let outputWritten = false;
+  const removeFile = deps.removeFile || deps.unlinkFile || deps.unlink || deps.rm || ((p) => fs.unlinkSync(p));
+  const removeOutput = () => {
     try {
-      if (!exists(filePath)) return null;
-      return String(readFile(filePath));
-    } catch {
+      if (!exists(outPath)) return null;
+      removeFile(outPath);
       return null;
+    } catch (err) {
+      return err;
     }
+  };
+  // 既定出力だけは入力検査前に消し、失敗した実行後に前回本文を再利用できないようにする。
+  // 明示された --out は任意の既存ファイルを指し得るため、本文を書ける段階まで変更しない。
+  const oldOutputError = usesDefaultOut ? removeOutput() : null;
+  if (oldOutputError) {
+    writeErr(`[cross-review] 以前の PR コメント本文を削除できません: ${outPath} (${oldOutputError.message || 'delete error'})\n`);
+    process.exitCode = 1;
+    return null;
+  }
+  const fail = (message) => {
+    const cleanupError = (usesDefaultOut || outputWritten) ? removeOutput() : null;
+    writeErr(message);
+    if (cleanupError) {
+      writeErr(`[cross-review] 失敗後の PR コメント本文を削除できません: ${outPath} (${cleanupError.message || 'delete error'})\n`);
+    }
+    process.exitCode = 1;
+    return null;
   };
 
   // レビュアーは明示が無ければメタ情報から自動で決める。複数あるときに黙って片方を選ぶと、
@@ -2453,7 +2616,7 @@ function runCommentCommand(opts, deps = {}) {
   if (!reviewer) {
     const found = detectRoundReviewers(dir, round, deps);
     if (found.length === 0) {
-      return fail(`[cross-review] ${round} 往復目のレビュー出力が見つかりません: ${path.join(dir, `round-${round}-<reviewer>.json`)}\n`
+      return fail(`[cross-review] ${round} 往復目のレビュアーのメタ情報が見つかりません: ${path.join(dir, `round-${round}-<reviewer>.json`)}\n`
         + '  レビューを実行すると保存されます (--no-state では保存しません)。\n');
     }
     if (found.length > 1) {
@@ -2463,40 +2626,50 @@ function runCommentCommand(opts, deps = {}) {
     reviewer = found[0];
   }
   const names = roundFileNames(round, reviewer);
-  const reviewPath = path.join(dir, names.review);
-  const review = readIfPresent(reviewPath);
-  if (review == null) {
-    return fail(`[cross-review] レビュー出力を読めません: ${reviewPath}\n`
-      + `  subagent 経路ではサブエージェントの出力をこのファイルへ貼ってから実行してください (CLI が保存するのは ${names.prompt} です)。\n`);
-  }
 
-  // メタ情報が無くてもコメントは作れる (要約行が「不明」になるだけ) ので、警告に留める。
+  // メタ情報は実行経路と base を確定する入力なので、無い、読めない、形式が不正な場合は失敗にする。
   const metaPath = path.join(dir, names.meta);
-  const metaText = readIfPresent(metaPath);
-  let meta = null;
-  if (metaText == null) {
-    writeErr(`[cross-review] メタ情報がありません: ${metaPath} (実行経路と base は「不明」と書きます)。\n`);
-  } else {
-    try {
-      meta = JSON.parse(metaText);
-    } catch {
-      writeErr(`[cross-review] メタ情報を読めません (JSON 不正): ${metaPath} (実行経路と base は「不明」と書きます)。\n`);
+  let metaText;
+  try {
+    if (!exists(metaPath)) {
+      return fail(`[cross-review] メタ情報がありません: ${metaPath}\n`);
     }
+    metaText = String(readFile(metaPath));
+  } catch (err) {
+    return fail(`[cross-review] メタ情報を読めません: ${metaPath} (${(err && err.message) || 'read error'})\n`);
+  }
+  let meta;
+  try {
+    meta = JSON.parse(metaText);
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('JSON object required');
+  } catch (err) {
+    return fail(`[cross-review] メタ情報を読めません (JSON 不正): ${metaPath} (${(err && err.message) || 'parse error'})\n`);
   }
 
-  // 判断ファイルが無いのはエラーにしない。雛形を書き出し、指摘の節を空にしたコメントを作る
-  // (レビュー出力と検証出力だけ先に整形しておき、裏取りを書いてから作り直せるようにする)。
+  // 判断ファイルが無ければ雛形だけを保存して終了する。未確認の指摘を含む本文を生成しない。
   const triagePath = path.join(dir, names.triage);
-  const triage = readIfPresent(triagePath);
-  if (triage == null) {
-    let hint = '';
+  let hasTriage;
+  try {
+    hasTriage = exists(triagePath);
+  } catch (err) {
+    return fail(`[cross-review] 判断ファイルを確認できません: ${triagePath} (${(err && err.message) || 'stat error'})\n`);
+  }
+  if (!hasTriage) {
     try {
       writeReviewFile(triagePath, `${TRIAGE_TEMPLATE}\n`);
-      hint = '  雛形を書き出したので、指摘ごとの裏取りと対応を書いてから再実行してください。\n';
     } catch (err) {
-      hint = `  雛形を書き出せませんでした (${(err && err.message) || 'write error'})。\n`;
+      return fail(`[cross-review] 判断ファイルの雛形を書けません: ${triagePath} (${(err && err.message) || 'write error'})\n`);
     }
-    writeErr(`[cross-review] 判断ファイルがありません: ${triagePath} (指摘と対応の節は空になります)。\n${hint}`);
+    writeErr(`[cross-review] 判断ファイルがありません: ${triagePath}\n`
+      + '  雛形を書き出したので、指摘ごとの裏取りと対応を書いてから再実行してください。\n');
+    process.exitCode = 1;
+    return null;
+  }
+  let triage;
+  try {
+    triage = String(readFile(triagePath));
+  } catch (err) {
+    return fail(`[cross-review] 判断ファイルを読めません: ${triagePath} (${(err && err.message) || 'read error'})\n`);
   }
 
   // 検証出力は明示指定なので、読めないときは黙って省かずエラーにする。
@@ -2509,28 +2682,56 @@ function runCommentCommand(opts, deps = {}) {
     }
   }
 
-  const body = buildRoundComment({ round, reviewer, meta, triage, verify, review });
-  const outPath = opts.outPath || path.join(dir, names.comment);
+  let body;
   try {
-    writeReviewFile(outPath, body);
+    body = buildRoundComment({ round, reviewer, meta, triage, verify });
   } catch (err) {
-    return fail(`[cross-review] PR コメント本文を書けません: ${outPath} (${(err && err.message) || 'write error'})\n`);
+    return fail(`[cross-review] PR コメント本文を生成できません: ${outPath} (${(err && err.message) || 'build error'})\n`);
   }
-  const prInfoOf = deps.prInfo || createPrInfoReader(deps, isNoFetch(deps.env));
-  const prInfo = prInfoOf();
-  const prNumber = prInfo.known && prInfo.present && prInfo.number ? String(prInfo.number) : '<PR番号>';
-  // パスは二重引用符で囲む。空白を含むパス (Windows の "Program Files" 配下など) でも
-  // PowerShell / cmd / POSIX シェルのいずれでもそのまま貼れるようにするため。
-  // パス自体に二重引用符が含まれる場合は想定しない (ファイル名として現れない)。
-  writeErr(`[cross-review] PR コメントの本文を生成しました: ${outPath}\n`
-    + `  gh pr comment ${prNumber} --body-file "${outPath}"\n`);
-  // 上限を超えていても書き出しは済んでいるので止めない。投稿するのは利用者なので、
-  // 弾かれうることだけ知らせて、判断ファイルや検証出力を削る判断を委ねる。
   if (body.length > COMMENT_SIZE_WARN_LIMIT) {
     writeErr(`[cross-review] 生成した本文が ${groupDigits(body.length)} 文字あります`
       + ' (GitHub のコメント上限 65,536 文字を超えると投稿できません)。\n'
       + '  判断ファイルか --verify の出力を削ってから投稿してください。\n');
   }
+  // 投稿経路でも本文を先に保存する。gh へ渡す本文はこのメモリ上の値を使い、
+  // 保存ファイルを読み返さない。投稿に失敗した場合は fail がこの出力先を削除する。
+  try {
+    writeReviewFile(outPath, body);
+    outputWritten = true;
+  } catch (err) {
+    return fail(`[cross-review] PR コメント本文を書けません: ${outPath} (${(err && err.message) || 'write error'})\n`);
+  }
+  if (opts.postNumber != null) {
+    const ghRun = deps.ghRun || defaultGhRunner;
+    let result;
+    try {
+      result = normalizeGhResult(ghRun(
+        ['pr', 'comment', String(opts.postNumber), '--body-file', '-'],
+        { input: body, timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
+      ));
+    } catch (err) {
+      return fail(`[cross-review] PR コメントを投稿できません: ${err.message || 'gh error'}\n`);
+    }
+    if (!result || result.status !== 0) {
+      const detail = result
+        ? (result.error || result.stderr || result.stdout || `exit ${result.status}`)
+        : 'gh の実行結果を取得できません';
+      return fail(`[cross-review] PR コメントを投稿できません: ${detail}\n`);
+    }
+    writeErr(`[cross-review] PR #${opts.postNumber} へコメントを投稿しました: ${outPath}\n`);
+    return outPath;
+  }
+  const prInfoOf = deps.prInfo || createPrInfoReader(deps, isNoFetch(deps.env));
+  let prInfo;
+  try {
+    prInfo = prInfoOf();
+  } catch (err) {
+    return fail(`[cross-review] PR 情報を取得できません: ${err.message || 'gh error'}\n`);
+  }
+  const prNumber = prInfo && prInfo.known && prInfo.present && prInfo.number ? String(prInfo.number) : '<PR番号>';
+  // パスは二重引用符で囲む。空白を含むパスでもそのまま貼れるようにする。
+  writeErr(`[cross-review] PR コメントの本文を生成しました: ${outPath}\n`
+    + `  gh pr comment ${prNumber} --body-file "${outPath}"\n`);
   return outPath;
 }
 
@@ -2555,6 +2756,10 @@ function main() {
   }
   if (opts.command === 'comment') {
     runCommentCommand(opts);
+    return;
+  }
+  if (opts.command === 'artifacts') {
+    runArtifactsCommand(opts);
     return;
   }
   runReview(opts);
@@ -2601,6 +2806,8 @@ module.exports = {
   runReview,
   runStateCommand,
   runDismissCommand,
+  runArtifactsCommand,
+  cleanLegacyArtifacts,
   runCommentCommand,
   buildRoundComment,
   buildMetaSummary,
@@ -2608,9 +2815,13 @@ module.exports = {
   baseSourceLabel,
   roundFileNames,
   resolveReviewDir,
+  safeBranchDirName,
+  resolveBranchReviewDir,
+  isLegacyArtifactName,
   saveRoundArtifacts,
   detectRoundReviewers,
   normalizeGhResult,
+  defaultGhRunner,
   readPrInfo,
   createPrInfoReader,
   loadChecklist,
@@ -2624,7 +2835,6 @@ module.exports = {
   STATE_FILENAME,
   REVIEW_DIR_NAME,
   VERIFY_TAIL_LINES,
-  COMMENT_REVIEW_LIMIT,
   COMMENT_SIZE_WARN_LIMIT,
   OUTPUT_CAPTURE_LIMIT,
   OUTPUT_TRUNCATED_NOTICE,
@@ -2644,6 +2854,7 @@ module.exports = {
   FIX_INSTRUCTION,
   REVIEWER_NOTES_HEADER,
   DISMISSED_HEADER,
+  USAGE,
 };
 
 if (require.main === module) main();
