@@ -432,6 +432,22 @@ function parseCredits(dto) {
   return { amount, currency: null, unlimited: false };
 }
 
+function parseResetCredits(dto) {
+  const resetCredits = dto && dto.rateLimitResetCredits;
+  if (!resetCredits || !Number.isFinite(resetCredits.availableCount) || resetCredits.availableCount <= 0) {
+    return null;
+  }
+  const expirations = Array.isArray(resetCredits.credits)
+    ? resetCredits.credits
+      .filter((credit) => credit && credit.status === 'available' && Number.isFinite(credit.expiresAt))
+      .map((credit) => credit.expiresAt * 1000)
+    : [];
+  return {
+    availableCount: resetCredits.availableCount,
+    nextExpiresAt: expirations.length ? Math.min(...expirations) : null,
+  };
+}
+
 // One long-lived app-server per Codex home, keyed by the normalized home path
 // so the same account never ends up with two processes. Entries are created on
 // demand and removed by shutdown().
@@ -454,6 +470,7 @@ async function fetch(home = defaultCodexHome()) {
     weekly: windowToRateLimit(pickWindow(dto, 10080)),
     weeklyScoped: [],
     credits: parseCredits(dto),
+    resetCredits: parseResetCredits(dto),
     plan: extractPlanLabel(dto),
   };
 }
@@ -486,6 +503,6 @@ module.exports = {
   shutdown,
   authFilePath,
   _private: {
-    codexAuthFile, extractPlanLabel, parseCredits, isRestartableError, makeCodexRpcError,
+    codexAuthFile, extractPlanLabel, parseCredits, parseResetCredits, isRestartableError, makeCodexRpcError,
   },
 };
