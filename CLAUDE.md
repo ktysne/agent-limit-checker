@@ -97,6 +97,7 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 ---
 
 ## リモートセッション時の作業について
+この節は、~/.claude 配下(グローバル CLAUDE.md、スキル、エージェント定義、codex-agent.sh)を読めないクラウド実行のための代替である。Claude Code のローカル実行では `~/.claude/CLAUDE.md` の規則に従う。
 
 ### モデル役割分担（メインセッションとサブエージェント）
 メインセッションは設計・監査・レビューに専念し、実装は Agent ツールのサブエージェントに切り出す。`~/.claude/agents/` の impl-hard / impl-standard / impl-light はリモートセッションから読めないため、区分名ではなくモデルと effort を直接指定する。
@@ -114,7 +115,7 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 - 監査で得た理解をそのまま修正に使うほうが正確
 - hard で 2 回失敗した
 
-サブエージェントへの依頼文には、目的、変更対象、期待する結果、検証方法を書く。
+サブエージェントへの依頼文には、目的、変更対象、完了条件(例: 指定のテストが通る、対象の全箇所を移行した)、止まって報告する条件、検証方法を書く。
 
 ### AI 相互レビュー（ai-cross-review）
 相互レビューの手順の正本は [docs/cross-review.md](docs/cross-review.md)（vendored）と、グローバル SKILL `~/.claude/skills/cross-review/SKILL.md`（無い環境では vendored の [.claude/skills/cross-review/SKILL.md](.claude/skills/cross-review/SKILL.md)）である。

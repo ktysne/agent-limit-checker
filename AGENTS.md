@@ -97,6 +97,7 @@ Electron ランタイムが必要な統合テスト/probe は `test/*.smoke.js` 
 ---
 
 ## リモートセッション時の作業について
+この節は、~/.claude 配下(グローバル CLAUDE.md、スキル、エージェント定義、codex-agent.sh)を読めないクラウド実行のための代替である。Claude Code のローカル実行では `~/.claude/CLAUDE.md` の規則に従う。
 
 ### AI 相互レビュー（ai-cross-review）
 相互レビューの手順の正本は [docs/cross-review.md](docs/cross-review.md)（vendored）と、グローバル SKILL `~/.codex/skills/cross-review/SKILL.md`（Claude 側は `~/.claude/skills/cross-review/SKILL.md`、どちらも無い環境では vendored の [.claude/skills/cross-review/SKILL.md](.claude/skills/cross-review/SKILL.md)）である。
