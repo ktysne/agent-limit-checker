@@ -146,13 +146,13 @@ function renderResetCredits(resetCredits) {
   const expiry = Number.isFinite(resetCredits.nextExpiresAt) && resetCredits.nextExpiresAt > Date.now()
     ? new Date(resetCredits.nextExpiresAt).toLocaleDateString([], { month: 'numeric', day: 'numeric' })
     : '';
-  const value = expiry
-    ? `${resetCredits.availableCount} 回 (最短 ${expiry} 失効)`
-    : `${resetCredits.availableCount} 回`;
+  const expiryHtml = expiry
+    ? `<span class="reset-credit-expiry">最短 ${escapeHtml(expiry)} 失効</span>`
+    : '';
   return `
     <div class="credit-row">
       <span class="bucket-label">リセット権</span>
-      <span class="credit-value">${escapeHtml(value)}</span>
+      <span class="reset-credit-value">${escapeHtml(`${resetCredits.availableCount} 回`)}${expiryHtml}</span>
     </div>
   `;
 }
