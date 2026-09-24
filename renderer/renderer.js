@@ -45,6 +45,22 @@ function resetText(resetsAtMs) {
   return `あと ${rel} (${absolute} リセット)`;
 }
 
+function cloudCreditExpiryText(expiresAtMs) {
+  if (expiresAtMs == null) return '';
+  const now = Date.now();
+  if (expiresAtMs <= now) return '失効済み';
+  const diffHours = Math.floor((expiresAtMs - now) / 3_600_000);
+  const days = Math.floor(diffHours / 24);
+  const hours = diffHours % 24;
+  const absolute = new Date(expiresAtMs).toLocaleString([], {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `あと ${days}日${hours}時間 (${absolute} 失効)`;
+}
+
 function renderBucket(label, limit, { compact = false } = {}) {
   const cls = compact ? 'bucket compact' : 'bucket';
   if (!limit) {
@@ -73,12 +89,10 @@ function renderBucket(label, limit, { compact = false } = {}) {
 //     (115.9354… → "115.94").
 // The provider already normalizes `amount` (dollars for money, credit count for
 // codex), so this is purely display.
-function formatCredit(amount, currency) {
+function formatCredit(amount, currency, { allowZero = false } = {}) {
   const n = Number(amount);
-  // Only a positive balance is worth a row. The provider already enforces this,
-  // but guarding here means a stray null/0/negative amount hides the row rather
-  // than printing a misleading "0".
-  if (!Number.isFinite(n) || n <= 0) return null;
+  // 通常は正の残高だけを表示し、クラウドクレジットは枯渇後も 0 を表示する。
+  if (!Number.isFinite(n) || n < 0 || (!allowZero && n === 0)) return null;
   // toFixed(2) rounds to the nearest hundredth (round half up), which is exactly
   // "小数第3位以下を四捨五入して2桁表示".
   if (!currency) return `${n.toFixed(2)} クレジット`;
@@ -87,6 +101,27 @@ function formatCredit(amount, currency) {
   } catch {
     return `${n.toFixed(2)} ${currency}`;
   }
+}
+
+function renderCloudCredit(cloudCredit) {
+  if (!cloudCredit) return '';
+  const remaining = formatCredit(Math.max(0, cloudCredit.remaining), 'USD', { allowZero: true });
+  const limit = formatCredit(cloudCredit.limit, 'USD');
+  if (!remaining || !limit) return '';
+  const colorCls = classify(cloudCredit.utilization);
+  const width = Math.min(100, Math.max(0, cloudCredit.utilization * 100));
+  const expiry = cloudCreditExpiryText(cloudCredit.expiresAt);
+  const details = [expiry, cloudCredit.locked != null ? '利用停止中' : ''].filter(Boolean).join('・');
+  return `
+    <div class="bucket compact">
+      <div class="bucket-row">
+        <span class="bucket-label">クラウドクレジット</span>
+        <span class="bucket-value ${colorCls}">${escapeHtml(`${remaining} / ${limit}`)}</span>
+      </div>
+      <div class="progress"><div class="progress-fill ${colorCls}" style="width:${width}%"></div></div>
+      ${details ? `<div class="reset-text">${escapeHtml(details)}</div>` : ''}
+    </div>
+  `;
 }
 
 // Show the available credit balance for a service, or nothing when there is no
@@ -153,6 +188,7 @@ function renderService(body, svc, loginInProgress) {
       html += renderBucket(`週次 (${escapeHtml(scoped.label)})`, scoped, { compact: true });
     }
   }
+  html += renderCloudCredit(usage.cloudCredit);
   // Available credit balance, only when the account actually has one.
   html += renderCredits(usage.credits);
   body.innerHTML = html;

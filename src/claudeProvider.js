@@ -7,6 +7,9 @@ const https = require('node:https');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const REQUEST_TIMEOUT_MS = 12_000;
+// API 上の内部名で上流の変更により変わりうる。
+// 変更後は表示が消えるだけで、他の利用状況には影響しない。
+const CLOUD_CREDIT_BUCKET_KEY = 'iguana_necktie';
 
 // Claude Code CLI は CLAUDE_CONFIG_DIR が設定されていればそこを設定ディレクトリ
 // として使う。credentials は CLI と共有するので、同じ規則で解決する。
@@ -240,6 +243,36 @@ function parseCredits(json) {
   return { amount, currency, unlimited: false };
 }
 
+function parseCloudCredit(json) {
+  const bucket = json && json[CLOUD_CREDIT_BUCKET_KEY];
+  if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) return null;
+  const limit = bucket.limit_dollars;
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) return null;
+
+  let used = typeof bucket.used_dollars === 'number' && Number.isFinite(bucket.used_dollars)
+    ? bucket.used_dollars
+    : null;
+  let remaining = typeof bucket.remaining_dollars === 'number' && Number.isFinite(bucket.remaining_dollars)
+    ? bucket.remaining_dollars
+    : null;
+  if (used == null && remaining != null) used = limit - remaining;
+  if (remaining == null && used != null) remaining = limit - used;
+  if (used == null || remaining == null) return null;
+
+  const parsedExpiry = typeof bucket.resets_at === 'string' ? Date.parse(bucket.resets_at) : NaN;
+  const locked = typeof bucket.locked_reason === 'string'
+    ? bucket.locked_reason
+    : null;
+  return {
+    limit,
+    used,
+    remaining,
+    utilization: used / limit,
+    expiresAt: Number.isNaN(parsedExpiry) ? null : parsedExpiry,
+    locked,
+  };
+}
+
 async function fetchUsage(accessToken) {
   const { json } = await httpGetJson(USAGE_URL, {
     Authorization: `Bearer ${accessToken}`,
@@ -253,6 +286,7 @@ async function fetchUsage(accessToken) {
     weekly: parseBucket(json.seven_day),
     weeklyScoped: parseWeeklyScoped(json),
     credits: parseCredits(json),
+    cloudCredit: parseCloudCredit(json),
   };
 }
 
@@ -571,6 +605,7 @@ module.exports = {
     parseBucket,
     parseWeeklyScoped,
     parseCredits,
+    parseCloudCredit,
     extractPlanLabel,
   },
 };
