@@ -311,7 +311,7 @@ html.clamped {
 }
 
 .reset-credit-expiry {
-  margin-left: 6px;
+  margin-left: 3px;
   font-size: 10px;
   color: var(--muted);
 }

@@ -147,7 +147,7 @@ function renderResetCredits(resetCredits) {
     ? new Date(resetCredits.nextExpiresAt).toLocaleDateString([], { month: 'numeric', day: 'numeric' })
     : '';
   const expiryHtml = expiry
-    ? `<span class="reset-credit-expiry">最短 ${escapeHtml(expiry)} 失効</span>`
+    ? ` <span class="reset-credit-expiry">最短 ${escapeHtml(expiry)} 失効</span>`
     : '';
   return `
     <div class="credit-row">
