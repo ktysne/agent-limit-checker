@@ -130,6 +130,56 @@ test('parseCredits hides a negative or non-numeric balance', () => {
   );
 });
 
+test('parseResetCredits reports the available count and earliest available expiration', () => {
+  assert.deepEqual(
+    _private.parseResetCredits({
+      rateLimitResetCredits: {
+        availableCount: 2,
+        credits: [
+          {
+            status: 'available',
+            expiresAt: 1791153838,
+            title: 'Full reset (Weekly + 5 hr)',
+          },
+          { status: 'available', expiresAt: 1792694262 },
+        ],
+      },
+    }),
+    { availableCount: 2, nextExpiresAt: 1791153838000 },
+  );
+});
+
+test('parseResetCredits hides a missing reset-credit count', () => {
+  assert.equal(_private.parseResetCredits(null), null);
+  assert.equal(_private.parseResetCredits({}), null);
+  assert.equal(_private.parseResetCredits({ rateLimitResetCredits: null }), null);
+  assert.equal(_private.parseResetCredits({ rateLimitResetCredits: { availableCount: 0 } }), null);
+  assert.equal(_private.parseResetCredits({ rateLimitResetCredits: { availableCount: Infinity } }), null);
+});
+
+test('parseResetCredits returns the count when expiration details are unavailable', () => {
+  assert.deepEqual(
+    _private.parseResetCredits({ rateLimitResetCredits: { availableCount: 2, credits: null } }),
+    { availableCount: 2, nextExpiresAt: null },
+  );
+});
+
+test('parseResetCredits ignores non-available and non-expiring credits', () => {
+  assert.deepEqual(
+    _private.parseResetCredits({
+      rateLimitResetCredits: {
+        availableCount: 3,
+        credits: [
+          { status: 'redeemed', expiresAt: 100 },
+          { status: 'available', expiresAt: null },
+          { status: 'available', expiresAt: 1792694262 },
+        ],
+      },
+    }),
+    { availableCount: 3, nextExpiresAt: 1792694262000 },
+  );
+});
+
 test('codex auth file path follows the home it is given', () => {
   const codexHome = path.join('tmp', 'custom-codex-home');
   assert.equal(_private.codexAuthFile(codexHome), path.join(codexHome, 'auth.json'));

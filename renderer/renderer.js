@@ -141,6 +141,22 @@ function renderCredits(credits) {
   `;
 }
 
+function renderResetCredits(resetCredits) {
+  if (!resetCredits) return '';
+  const expiry = Number.isFinite(resetCredits.nextExpiresAt) && resetCredits.nextExpiresAt > Date.now()
+    ? new Date(resetCredits.nextExpiresAt).toLocaleDateString([], { month: 'numeric', day: 'numeric' })
+    : '';
+  const value = expiry
+    ? `${resetCredits.availableCount} 回 (最短 ${expiry} 失効)`
+    : `${resetCredits.availableCount} 回`;
+  return `
+    <div class="credit-row">
+      <span class="bucket-label">リセット権</span>
+      <span class="credit-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
 // Fill one service section's body. `body` is the .service-body element, so the
 // same renderer serves the static Claude section and every generated Codex one.
 function renderService(body, svc, loginInProgress) {
@@ -191,6 +207,7 @@ function renderService(body, svc, loginInProgress) {
   html += renderCloudCredit(usage.cloudCredit);
   // Available credit balance, only when the account actually has one.
   html += renderCredits(usage.credits);
+  html += renderResetCredits(usage.resetCredits);
   body.innerHTML = html;
 }
 
