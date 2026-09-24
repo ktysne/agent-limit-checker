@@ -305,6 +305,17 @@ html.clamped {
   color: var(--text);
 }
 
+/* 使用率のメーターより目立たせないため、残高より弱い書式にする。 */
+.reset-credit-value {
+  color: var(--label);
+}
+
+.reset-credit-expiry {
+  margin-left: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
 .error-box {
   background: var(--error-bg);
   border-left: 3px solid var(--error-border);
