@@ -52,6 +52,63 @@ test('parseBucket returns null when utilization is missing', () => {
   assert.equal(_private.parseBucket({}), null);
 });
 
+test('parseCloudCredit reads the cloud-session credit bucket', () => {
+  assert.deepEqual(_private.parseCloudCredit({
+    iguana_necktie: {
+      utilization: 0.7085432,
+      resets_at: '2026-11-05T07:59:00+00:00',
+      limit_dollars: 250,
+      used_dollars: 1.771358,
+      remaining_dollars: 248.228642,
+      locked_reason: null,
+    },
+  }), {
+    limit: 250,
+    used: 1.771358,
+    remaining: 248.228642,
+    utilization: 1.771358 / 250,
+    expiresAt: Date.parse('2026-11-05T07:59:00+00:00'),
+    locked: null,
+  });
+});
+
+test('parseCloudCredit hides a missing bucket or an invalid limit', () => {
+  assert.equal(_private.parseCloudCredit(null), null);
+  assert.equal(_private.parseCloudCredit({}), null);
+  assert.equal(_private.parseCloudCredit({ iguana_necktie: null }), null);
+  assert.equal(_private.parseCloudCredit({ iguana_necktie: { limit_dollars: null } }), null);
+});
+
+test('parseCloudCredit derives used from remaining when used is missing', () => {
+  assert.deepEqual(_private.parseCloudCredit({
+    iguana_necktie: { limit_dollars: 100, remaining_dollars: 72, resets_at: 'invalid' },
+  }), {
+    limit: 100,
+    used: 28,
+    remaining: 72,
+    utilization: 0.28,
+    expiresAt: null,
+    locked: null,
+  });
+});
+
+test('parseCloudCredit derives remaining from used when remaining is missing', () => {
+  assert.deepEqual(_private.parseCloudCredit({
+    iguana_necktie: { limit_dollars: 100, used_dollars: 28 },
+  }), {
+    limit: 100,
+    used: 28,
+    remaining: 72,
+    utilization: 0.28,
+    expiresAt: null,
+    locked: null,
+  });
+});
+
+test('parseCloudCredit rejects a bucket without either balance value', () => {
+  assert.equal(_private.parseCloudCredit({ iguana_necktie: { limit_dollars: 100 } }), null);
+});
+
 test('parseWeeklyScoped reads per-model weekly caps from the limits array', () => {
   // Shape observed on /api/oauth/usage once Fable 5 became conditionally
   // available: the flat `seven_day_sonnet` bucket is null and the scoped cap

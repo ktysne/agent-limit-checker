@@ -69,6 +69,14 @@ function makeSnapshot(codexCount) {
       fiveHour: { utilization: 0.83, resetsAt: now + 41 * 60 * 1000 },
       weekly: { utilization: 0.18, resetsAt: now + (16 * 3600 + 60) * 1000 },
       weeklyScoped: [{ label: 'Fable', utilization: 0.0, resetsAt: null }], // long "ウィンドウ未開始…" line
+      cloudCredit: {
+        limit: 250,
+        used: 1.77,
+        remaining: 248.23,
+        utilization: 1.77 / 250,
+        expiresAt: now + 40 * 86400 * 1000,
+        locked: null,
+      },
     } },
     codexAccounts: Array.from({ length: codexCount }, (_, i) => codexAccount(i)),
     fetchedAt: now,
