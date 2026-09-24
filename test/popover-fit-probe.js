@@ -246,8 +246,8 @@ app.whenReady().then(async () => {
   pass = check('html.clamped not set', !fit.clampedClass) && pass;
   pass = check('requests settled', fit.reportsAfterIdle === fit.reports) && pass;
 
-  // 2. Content over the ceiling (3 Codex accounts + settings panel, small
-  //    ceiling): the window stops at the ceiling and the renderer scrolls.
+  // 2. Content over the ceiling (3 Codex accounts + settings panel): the
+  //    window stops at the ceiling and the renderer scrolls.
   // パネルを閉じた 3 アカウント構成は収まり、開くと超える高さにする。
   const ceiling = 1100;
   const clamped = await runCase({
