@@ -419,7 +419,7 @@ test('describeRefreshFailure falls back to the status when the body carries no O
   assert.equal(
     _private.describeRefreshFailure({
       status: 400,
-      body: '{"error":"weird\nline","error_description":"secret"}',
+      body: '{"error":"weird\\nline","error_description":"secret"}',
     }),
     'status 400',
   );
