@@ -140,7 +140,7 @@ function ntfyPatchFromRenderer(value) {
   for (const key of ['topicUrl', 'accessToken']) {
     if (Object.hasOwn(raw, key)) patch[key] = typeof raw[key] === 'string' ? raw[key] : '';
   }
-  for (const key of ['notifyFiveHour', 'notifyWeekly']) {
+  for (const key of ['notifyFiveHour', 'notifyWeekly', 'notifyResetCreditsExpiry']) {
     if (Object.hasOwn(raw, key)) patch[key] = !!raw[key];
   }
   return patch;

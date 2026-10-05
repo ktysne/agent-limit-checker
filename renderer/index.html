@@ -93,6 +93,14 @@
               <span class="slider"></span>
             </label>
           </div>
+          <div class="setting-row">
+            <label for="ntfy-notify-reset-credits-expiry">Codex リセット権の期限を通知</label>
+            <label class="switch">
+              <input type="checkbox" id="ntfy-notify-reset-credits-expiry" name="ntfy-notify-reset-credits-expiry" aria-describedby="ntfy-notify-reset-credits-expiry-hint">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div id="ntfy-notify-reset-credits-expiry-hint" class="setting-hint">最も早い期限の5時間前に通知します。5時間を切っている場合は、有効期限内ならすぐ通知します。</div>
           <div id="ntfy-status" class="setting-hint" aria-live="polite"></div>
         </fieldset>
       </form>

@@ -12,6 +12,7 @@ const DEFAULTS = {
     accessToken: '',
     notifyFiveHour: false,
     notifyWeekly: false,
+    notifyResetCreditsExpiry: false,
   },
   // Per-account display name overrides for Codex, keyed by the account's home
   // directory name (Account.label, e.g. ".codex-sub"). The label — not the
@@ -41,6 +42,7 @@ function normalizeNtfy(value) {
     accessToken: cleanString(raw.accessToken),
     notifyFiveHour: !!raw.notifyFiveHour,
     notifyWeekly: !!raw.notifyWeekly,
+    notifyResetCreditsExpiry: !!raw.notifyResetCreditsExpiry,
   };
 }
 

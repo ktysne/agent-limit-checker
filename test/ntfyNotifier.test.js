@@ -22,6 +22,59 @@ const silentLogger = {
   error() {},
 };
 
+function makeFakeClock(initialNow) {
+  let currentTime = initialNow;
+  const timers = [];
+  return {
+    timers,
+    now: () => currentTime,
+    setNow(value) {
+      currentTime = value;
+    },
+    setTimer(fn, delay) {
+      const timer = { fn, delay, cleared: false, fired: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer(timer) {
+      timer.cleared = true;
+    },
+    run(timer) {
+      timer.fired = true;
+      timer.fn();
+    },
+    activeTimers() {
+      return timers.filter((timer) => !timer.cleared && !timer.fired);
+    },
+  };
+}
+
+function makeResetCreditsAccount(id, displayName, availableCount, nextExpiresAt) {
+  return {
+    id,
+    displayName,
+    ok: true,
+    data: { resetCredits: { availableCount, nextExpiresAt } },
+  };
+}
+
+function makeCreditNotifier(clock, settings, sendMessage) {
+  return new NtfyResetNotifier({
+    getSettings: () => settings,
+    sendMessage,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    logger: silentLogger,
+  });
+}
+
+async function flushNotifier() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function sampleSnapshot(now) {
   return {
     claude: {
@@ -261,4 +314,367 @@ test('NtfyResetNotifier sends one notification per reset timestamp', async () =>
 
   notifier.update(snapshot);
   assert.equal(timers.length, 1);
+});
+
+test('reset-credit expiry warnings schedule five hours before expiry per account', async () => {
+  const now = 1_800_000_000_000;
+  const expiry = now + 8 * 60 * 60 * 1000;
+  const clock = makeFakeClock(now);
+  const sent = [];
+  const settings = {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyFiveHour: false,
+      notifyWeekly: false,
+      notifyResetCreditsExpiry: true,
+    },
+  };
+  const notifier = makeCreditNotifier(clock, settings, async (_config, message) => {
+    sent.push(message);
+    return { id: `msg-${sent.length}` };
+  });
+  const snapshot = {
+    claude: null,
+    codexAccounts: [
+      makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex Main', 2, expiry),
+      makeResetCreditsAccount(CODEX_REVIEW_ID, 'Codex Review', 1, expiry),
+    ],
+  };
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 2);
+  assert.deepEqual(clock.activeTimers().map((timer) => timer.delay), [3 * 60 * 60 * 1000, 3 * 60 * 60 * 1000]);
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 2);
+
+  clock.setNow(now + 3 * 60 * 60 * 1000);
+  for (const timer of clock.activeTimers()) clock.run(timer);
+  await flushNotifier();
+
+  assert.equal(sent.length, 2);
+  assert.ok(sent.some((message) => /Codex Main/.test(message.message)));
+  assert.ok(sent.some((message) => /Codex Review/.test(message.message)));
+  assert.ok(sent.some((message) => /残り: 2 回/.test(message.message)));
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('reset-credit expiry warning fires immediately when its five-hour lead time has passed', async () => {
+  const now = 1_800_000_000_000;
+  const clock = makeFakeClock(now);
+  const sent = [];
+  const settings = {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyFiveHour: false,
+      notifyWeekly: false,
+      notifyResetCreditsExpiry: true,
+    },
+  };
+  const notifier = makeCreditNotifier(clock, settings, async (_config, message) => {
+    sent.push(message);
+    return { id: 'msg-1' };
+  });
+  notifier.update({
+    claude: null,
+    codexAccounts: [
+      makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex Main', 2, now + 2 * 60 * 60 * 1000),
+      makeResetCreditsAccount(CODEX_REVIEW_ID, 'No Credits', 0, now + 60 * 60 * 1000),
+      makeResetCreditsAccount('/home/me/.codex-invalid', 'Expired', 1, now),
+      makeResetCreditsAccount('/home/me/.codex-past', 'Past', 1, now - 1000),
+      makeResetCreditsAccount('/home/me/.codex-unknown', 'Unknown', 1, null),
+    ],
+  });
+
+  assert.equal(clock.activeTimers().length, 1);
+  assert.equal(clock.activeTimers()[0].delay, 0);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sent.length, 1);
+
+  settings.ntfy.notifyResetCreditsExpiry = false;
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex Main', 2, now + 2 * 60 * 60 * 1000)],
+  });
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('reset-credit expiry warning rechecks a capped long timer before its due time', async () => {
+  const now = 1_800_000_000_000;
+  const maxTimerDelay = 2_147_483_647;
+  const expiry = now + 5 * 60 * 60 * 1000 + maxTimerDelay + 5_000;
+  const clock = makeFakeClock(now);
+  let sends = 0;
+  const notifier = makeCreditNotifier(clock, {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  }, async () => {
+    sends += 1;
+    return { id: 'msg-1' };
+  });
+
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', 1, expiry)],
+  });
+  const cappedTimer = clock.activeTimers()[0];
+  assert.equal(cappedTimer.delay, maxTimerDelay);
+  clock.setNow(now + maxTimerDelay);
+  clock.run(cappedTimer);
+  await flushNotifier();
+
+  assert.equal(sends, 0);
+  assert.equal(clock.activeTimers().length, 1);
+  assert.equal(clock.activeTimers()[0].delay, 5_000);
+
+  clock.setNow(now + maxTimerDelay + 5_000);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sends, 1);
+});
+
+test('same pending reset-credit expiry refreshes its count and account name', async () => {
+  const now = 1_800_000_000_000;
+  const expiry = now + 6 * 60 * 60 * 1000;
+  const clock = makeFakeClock(now);
+  const sent = [];
+  const settings = {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  };
+  const notifier = makeCreditNotifier(clock, settings, async (_config, message) => {
+    sent.push(message);
+    return { id: 'msg-1' };
+  });
+
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Old Name', 1, expiry)],
+  });
+  const originalTimer = clock.activeTimers()[0];
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Updated Name', 3, expiry)],
+  });
+
+  assert.equal(clock.activeTimers().length, 1);
+  assert.equal(clock.activeTimers()[0], originalTimer);
+  clock.setNow(now + 60 * 60 * 1000);
+  clock.run(originalTimer);
+  await flushNotifier();
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].message, /Updated Name/);
+  assert.match(sent[0].message, /3 回/);
+});
+
+test('reset-credit expiry changes, removal, depletion, and opt-out cancel pending timers', () => {
+  const now = 1_800_000_000_000;
+  const clock = makeFakeClock(now);
+  const settings = { ntfy: { notifyResetCreditsExpiry: true } };
+  const notifier = makeCreditNotifier(clock, settings, async () => ({ id: 'msg-1' }));
+  const snapshotFor = (expiresAt, count = 1) => ({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', count, expiresAt)],
+  });
+  const firstExpiry = now + 8 * 60 * 60 * 1000;
+  const changedExpiry = now + 9 * 60 * 60 * 1000;
+
+  notifier.update(snapshotFor(firstExpiry));
+  const firstTimer = clock.activeTimers()[0];
+  notifier.update(snapshotFor(changedExpiry));
+  assert.equal(firstTimer.cleared, true);
+  assert.equal(clock.activeTimers().length, 1);
+  const changedTimer = clock.activeTimers()[0];
+
+  notifier.update({ claude: null, codexAccounts: [] });
+  assert.equal(changedTimer.cleared, true);
+  assert.equal(clock.activeTimers().length, 0);
+
+  notifier.update(snapshotFor(firstExpiry));
+  const usedTimer = clock.activeTimers()[0];
+  notifier.update(snapshotFor(firstExpiry, 0));
+  assert.equal(usedTimer.cleared, true);
+  assert.equal(clock.activeTimers().length, 0);
+
+  notifier.update(snapshotFor(firstExpiry));
+  const optedOutTimer = clock.activeTimers()[0];
+  settings.ntfy.notifyResetCreditsExpiry = false;
+  notifier.update(snapshotFor(firstExpiry));
+  assert.equal(optedOutTimer.cleared, true);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('reset-credit expiry warning stops at the exact expiry time', async () => {
+  const now = 1_800_000_000_000;
+  const expiry = now + 60 * 60 * 1000;
+  const clock = makeFakeClock(now);
+  let sends = 0;
+  const notifier = makeCreditNotifier(clock, {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  }, async () => {
+    sends += 1;
+    return { id: 'msg-1' };
+  });
+
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', 1, expiry)],
+  });
+  const timer = clock.activeTimers()[0];
+  clock.setNow(expiry);
+  clock.run(timer);
+  await flushNotifier();
+
+  assert.equal(sends, 0);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('reset-credit expiry retry is not scheduled when its delay reaches expiry', async () => {
+  const now = 1_800_000_000_000;
+  const expiry = now + 5_000;
+  const clock = makeFakeClock(now);
+  let sends = 0;
+  const notifier = makeCreditNotifier(clock, {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  }, async () => {
+    sends += 1;
+    throw Object.assign(new Error('temporary failure'), { retryable: true });
+  });
+
+  notifier.update({
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', 1, expiry)],
+  });
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+
+  assert.equal(sends, 1);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('same in-flight reset-credit expiry does not duplicate and removal prevents retry', async () => {
+  const now = 1_800_000_000_000;
+  const snapshot = {
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', 1, now + 2 * 60 * 60 * 1000)],
+  };
+  const clock = makeFakeClock(now);
+  let rejectSend;
+  let sends = 0;
+  const notifier = makeCreditNotifier(clock, {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  }, () => {
+    sends += 1;
+    return new Promise((_resolve, reject) => { rejectSend = reject; });
+  });
+
+  notifier.update(snapshot);
+  clock.run(clock.activeTimers()[0]);
+  assert.equal(sends, 1);
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 0);
+  notifier.update({ claude: null, codexAccounts: [] });
+  rejectSend(Object.assign(new Error('temporary failure'), { retryable: true }));
+  await flushNotifier();
+
+  assert.equal(sends, 1);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('reset-credit expiry retries after five seconds and deduplicates after success', async () => {
+  const now = 1_800_000_000_000;
+  const expiry = now + 60 * 60 * 1000;
+  const clock = makeFakeClock(now);
+  let sends = 0;
+  const notifier = makeCreditNotifier(clock, {
+    ntfy: {
+      topicUrl: 'https://ntfy.sh/agent_limit_checker',
+      notifyResetCreditsExpiry: true,
+    },
+  }, async () => {
+    sends += 1;
+    if (sends === 1) throw Object.assign(new Error('temporary failure'), { retryable: true });
+    return { id: 'msg-2' };
+  });
+  const snapshot = {
+    claude: null,
+    codexAccounts: [makeResetCreditsAccount(CODEX_DEFAULT_ID, 'Codex', 1, expiry)],
+  };
+
+  notifier.update(snapshot);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sends, 1);
+  assert.equal(clock.activeTimers().length, 1);
+  assert.equal(clock.activeTimers()[0].delay, 5_000);
+
+  clock.setNow(now + 5_000);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sends, 2);
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 0);
+});
+
+test('ordinary reset retry succeeds at the 30-minute grace boundary', async () => {
+  const resetAt = 1_800_000_000_000;
+  const clock = makeFakeClock(resetAt);
+  let sends = 0;
+  const notifier = new NtfyResetNotifier({
+    getSettings: () => ({
+      ntfy: {
+        topicUrl: 'https://ntfy.sh/agent_limit_checker',
+        notifyFiveHour: true,
+        notifyWeekly: false,
+      },
+    }),
+    sendMessage: async () => {
+      sends += 1;
+      if (sends === 1) throw Object.assign(new Error('temporary failure'), { retryable: true });
+      return { id: 'msg-2' };
+    },
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    logger: silentLogger,
+  });
+  const snapshot = {
+    claude: { ok: true, data: { fiveHour: { utilization: 0.2, resetsAt: resetAt } } },
+    codexAccounts: [],
+  };
+
+  notifier.update(snapshot);
+  clock.setNow(resetAt + 30 * 60 * 1000 - 5_000);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sends, 1);
+  assert.equal(clock.activeTimers().length, 1);
+  assert.equal(clock.activeTimers()[0].delay, 5_000);
+
+  clock.setNow(resetAt + 30 * 60 * 1000);
+  clock.run(clock.activeTimers()[0]);
+  await flushNotifier();
+  assert.equal(sends, 2);
+
+  notifier.update(snapshot);
+  assert.equal(clock.activeTimers().length, 0);
 });

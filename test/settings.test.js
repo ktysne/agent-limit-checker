@@ -62,7 +62,18 @@ test('normalizeSettings leaves the other settings untouched', () => {
   assert.equal(settings.pollingIntervalSec, 60);
   assert.equal(settings.autoLaunch, true);
   assert.equal(settings.ntfy.topicUrl, 'https://ntfy.sh/topic');
+  assert.equal(settings.ntfy.notifyResetCreditsExpiry, false);
   assert.deepEqual(settings.codexAccountNames, { '.codex': 'Codex Main' });
+});
+
+test('normalizeSettings defaults reset-credit expiry notifications off for old settings', () => {
+  assert.equal(normalizeSettings({}).ntfy.notifyResetCreditsExpiry, false);
+  assert.equal(normalizeSettings({ ntfy: { notifyFiveHour: true } }).ntfy.notifyResetCreditsExpiry, false);
+});
+
+test('normalizeSettings preserves reset-credit expiry notification boolean values', () => {
+  assert.equal(normalizeSettings({ ntfy: { notifyResetCreditsExpiry: true } }).ntfy.notifyResetCreditsExpiry, true);
+  assert.equal(normalizeSettings({ ntfy: { notifyResetCreditsExpiry: false } }).ntfy.notifyResetCreditsExpiry, false);
 });
 
 test('normalizeCodexAccountNames never returns the input object itself', () => {
