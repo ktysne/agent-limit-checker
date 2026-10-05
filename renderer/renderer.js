@@ -389,13 +389,19 @@ function renderNtfyStatus(config) {
   const el = document.getElementById('ntfy-status');
   if (!el) return;
   const topicUrl = config && config.topicUrl;
-  const anyEnabled = !!(config && (config.notifyFiveHour || config.notifyWeekly));
+  const resetEnabled = !!(config && (config.notifyFiveHour || config.notifyWeekly));
+  const expiryEnabled = !!(config && config.notifyResetCreditsExpiry);
+  const anyEnabled = resetEnabled || expiryEnabled;
   if (!anyEnabled) {
     el.textContent = '通知は未選択です。Topic URL は推測されにくいものを使ってください。';
   } else if (!topicUrl) {
     el.textContent = '通知を送るには ntfy の Topic URL が必要です。';
+  } else if (resetEnabled && expiryEnabled) {
+    el.textContent = 'リセット時刻とリセット権の期限通知が有効です。ntfy へ送信します。';
+  } else if (expiryEnabled) {
+    el.textContent = 'リセット権の期限通知が有効です。失効5時間前に ntfy へ送信します。';
   } else {
-    el.textContent = '通知予約が有効です。リセット時刻に ntfy へ送信します。';
+    el.textContent = 'リセット時刻通知が有効です。リセット時刻に ntfy へ送信します。';
   }
 }
 
@@ -404,6 +410,7 @@ function renderNtfySettings(config = {}) {
   setInputValue('ntfy-access-token', config.accessToken);
   setChecked('ntfy-notify-five-hour', config.notifyFiveHour);
   setChecked('ntfy-notify-weekly', config.notifyWeekly);
+  setChecked('ntfy-notify-reset-credits-expiry', config.notifyResetCreditsExpiry);
   renderNtfyStatus(config);
 }
 
@@ -612,6 +619,10 @@ async function init() {
 
   document.getElementById('ntfy-notify-weekly').addEventListener('change', (evt) => {
     void saveNtfySettings({ notifyWeekly: evt.target.checked });
+  });
+
+  document.getElementById('ntfy-notify-reset-credits-expiry').addEventListener('change', (evt) => {
+    void saveNtfySettings({ notifyResetCreditsExpiry: evt.target.checked });
   });
 
   document.querySelectorAll('[data-login="claude"]').forEach((btn) => {
