@@ -300,12 +300,9 @@ html.clamped {
 }
 
 .credit-value {
-  font-weight: 700;
-  font-size: 13px;
   color: var(--text);
 }
 
-/* 使用率のメーターより目立たせないため、残高より弱い書式にする。 */
 .reset-credit-value {
   color: var(--label);
 }
