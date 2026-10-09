@@ -159,15 +159,17 @@ set "ZIP=build\release\AgentLimitChecker-%CURVER%-win-x64.zip"
 if exist "!ZIP!" del /q "!ZIP!"
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\package\*' -DestinationPath '!ZIP!'"
 if errorlevel 1 goto :failed
-powershell -NoProfile -Command "$archive=[IO.Compression.ZipFile]::OpenRead('!ZIP!'); try { $entries=$archive.Entries; if ($entries.Count -ne 3 -or @($entries | Where-Object { $_.FullName -notin @('AgentLimitChecker.exe','manual.html','license.html') }).Count -ne 0) { Write-Error 'zip must contain only AgentLimitChecker.exe, manual.html and license.html'; exit 1 } } finally { $archive.Dispose() }"
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop; $archive=[IO.Compression.ZipFile]::OpenRead('!ZIP!'); try { $entries=$archive.Entries; if ($entries.Count -ne 3 -or @($entries | Where-Object { $_.FullName -notin @('AgentLimitChecker.exe','manual.html','license.html') }).Count -ne 0) { Write-Error 'zip must contain only AgentLimitChecker.exe, manual.html and license.html'; exit 1 } } finally { $archive.Dispose() }"
 if errorlevel 1 goto :failed
 
 node tools\release-site.js generate --version %CURVER% --released-at %RELEASED_AT% --out build\release --zip "!ZIP!"
 if errorlevel 1 goto :failed
 set "AGENT_LIMIT_CHECKER_TEST_MANIFEST_PATH=%CD%\build\release\update-v2.json"
+set "AGENT_LIMIT_CHECKER_TEST_MANIFEST_VERSION=%CURVER%"
 dotnet test AgentLimitChecker.slnx -m:1 -nr:false --no-restore --filter "FullyQualifiedName~Parse_ReleaseSiteGeneratedManifest_IsAccepted"
 if errorlevel 1 goto :failed
 set "AGENT_LIMIT_CHECKER_TEST_MANIFEST_PATH="
+set "AGENT_LIMIT_CHECKER_TEST_MANIFEST_VERSION="
 
 echo.
 echo [agent-limit-checker] Package completed.

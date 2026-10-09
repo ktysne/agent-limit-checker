@@ -116,6 +116,19 @@ test('設定ファイルが無い場合は AGENT_LIMIT_CHECKER_FTP_* を使う',
   assert.throws(() => releaseSite.remoteRootOf({ remoteRoot: '/root/../outside' }), /絶対パス/);
 });
 
+test('設定ファイルの JSON 構文エラーに入力内容を含めない', async () => {
+  await withTempDir(async directory => {
+    const configPath = path.join(directory, 'deploy.config.json');
+    fs.writeFileSync(configPath, '{"password": s3cr3t-dummy}', 'utf8');
+
+    assert.throws(() => releaseSite.loadConfig(configPath, {}), error => {
+      assert.match(error.message, /JSON 構文が正しくありません/);
+      assert.equal(error.message.includes('s3cr3t-dummy'), false);
+      return true;
+    });
+  });
+});
+
 test('upload --dry-run は送信予定を表示し、外部サービスに接続しない', async () => {
   await withTempDir(async directory => {
     const { output, zipPath } = createReleaseFixture(directory);
@@ -179,22 +192,32 @@ test('FTP は update-v2.json を最後に送信する', async () => {
     const { output } = createReleaseFixture(directory);
     const files = new Map();
     const sent = [];
+    const remoteRoot = '/ktysne.info/agent-limit-checker';
+    let currentDirectory = '/';
+    const resolveRemotePath = remotePath => path.posix.resolve(currentDirectory, remotePath);
     const client = {
       async access() {},
-      async cd() {},
-      async ensureDir() {},
+      async cd(remotePath) { currentDirectory = resolveRemotePath(remotePath); },
+      async ensureDir(remotePath) { currentDirectory = resolveRemotePath(remotePath); },
       async uploadFrom(localPath, remoteName) {
-        sent.push(remoteName);
-        files.set(remoteName, { size: fs.statSync(localPath).size });
+        const remotePath = path.posix.join(currentDirectory, remoteName);
+        sent.push({ directory: currentDirectory, name: remoteName });
+        files.set(remotePath, { size: fs.statSync(localPath).size });
       },
-      async list() { return [...files].map(([name, value]) => ({ name, ...value })); },
+      async list() {
+        return [...files]
+          .filter(([remotePath]) => path.posix.dirname(remotePath) === currentDirectory)
+          .map(([remotePath, value]) => ({ name: path.posix.basename(remotePath), ...value }));
+      },
       async rename(from, to) {
-        const value = files.get(from);
+        const fromPath = path.posix.join(currentDirectory, from);
+        const toPath = path.posix.join(currentDirectory, to);
+        const value = files.get(fromPath);
         if (!value) throw new Error('missing temporary file');
-        files.delete(from);
-        files.set(to, value);
+        files.delete(fromPath);
+        files.set(toPath, value);
       },
-      async remove(name) { files.delete(name); },
+      async remove(name) { files.delete(path.posix.join(currentDirectory, name)); },
       close() {},
     };
     await releaseSite.uploadSite(releaseSite.uploadItems(output), {
@@ -203,16 +226,18 @@ test('FTP は update-v2.json を最後に送信する', async () => {
       user: 'user',
       password: 'secret',
       secure: true,
-      remoteRoot: '/ktysne.info/agent-limit-checker',
+      remoteRoot,
     }, { client });
     assert.deepEqual(sent, [
-      'app-icon-256.png.uploading',
-      'manual.html.uploading',
-      'license.html.uploading',
-      'index.html.uploading',
-      'update-v2.json.uploading',
+      { directory: path.posix.join(remoteRoot, 'assets'), name: 'app-icon-256.png.uploading' },
+      { directory: remoteRoot, name: 'manual.html.uploading' },
+      { directory: remoteRoot, name: 'license.html.uploading' },
+      { directory: remoteRoot, name: 'index.html.uploading' },
+      { directory: remoteRoot, name: 'update-v2.json.uploading' },
     ]);
-    assert.equal(files.has('update-v2.json'), true);
+    assert.equal(files.has(path.posix.join(remoteRoot, 'assets', 'app-icon-256.png')), true);
+    assert.equal(files.has(path.posix.join(remoteRoot, 'update-v2.json')), true);
+    assert.equal(currentDirectory, remoteRoot);
   });
 });
 
@@ -232,6 +257,7 @@ test('build-package.bat は検査後に発行し、タグを push してから R
     'ZipFile]::OpenRead',
     'release-site.js generate --version',
     'AGENT_LIMIT_CHECKER_TEST_MANIFEST_PATH=%CD%',
+    'AGENT_LIMIT_CHECKER_TEST_MANIFEST_VERSION=%CURVER%',
     '--no-restore --filter "FullyQualifiedName~Parse_ReleaseSiteGeneratedManifest_IsAccepted"',
     'git tag -a',
     'git push origin "refs/tags/%TAG%"',
@@ -241,4 +267,5 @@ test('build-package.bat は検査後に発行し、タグを push してから R
   assert.deepEqual(order, [...order].sort((left, right) => left - right));
   assert.match(batch, /--blame-hang-timeout 60s/);
   assert.match(batch, /X\.Y\.0/);
+  assert.match(batch, /Add-Type -AssemblyName System\.IO\.Compression\.FileSystem -ErrorAction Stop; \$archive=/);
 });

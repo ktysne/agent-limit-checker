@@ -137,7 +137,7 @@ function generateFiles({ version, out = DEFAULT_OUT, zip, releasedAt = localDate
 
 function uploadItems(output) {
   return [
-    ...ASSET_NAMES.map(name => ({ label: 'assets/' + name, localPath: path.join(output, 'assets', name), remoteSubDir: '' })),
+    ...ASSET_NAMES.map(name => ({ label: 'assets/' + name, localPath: path.join(output, 'assets', name), remoteSubDir: 'assets' })),
     { label: 'manual.html', localPath: path.join(output, 'manual.html'), remoteSubDir: '' },
     { label: 'license.html', localPath: path.join(output, 'license.html'), remoteSubDir: '' },
     { label: 'index.html', localPath: path.join(output, 'index.html'), remoteSubDir: '' },
@@ -235,11 +235,12 @@ function buildConfigFromEnv(env) {
 
 function loadConfig(configPath = path.join(ROOT, 'tools', 'deploy.config.json'), env = process.env) {
   if (fs.existsSync(configPath)) {
+    const configText = fs.readFileSync(configPath, 'utf8');
     let config;
     try {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } catch (error) {
-      throw new Error('tools/deploy.config.json を JSON として読めません: ' + error.message);
+      config = JSON.parse(configText);
+    } catch {
+      throw new Error('tools/deploy.config.json の JSON 構文が正しくありません。');
     }
     const merged = {
       host: config.host,
@@ -431,7 +432,15 @@ async function uploadSite(items, config, dependencies = {}) {
     for (const item of items) {
       item.remoteName = path.basename(item.localPath);
       item.localSize = fs.statSync(item.localPath).size;
-      await uploadRemoteItem(client, item);
+      try {
+        if (item.remoteSubDir) await client.ensureDir(item.remoteSubDir);
+        await uploadRemoteItem(client, item);
+      } finally {
+        if (item.remoteSubDir) {
+          await client.cd('/');
+          await client.ensureDir(remoteRoot);
+        }
+      }
       console.log('  送信しました: ' + item.label);
     }
   } finally {
