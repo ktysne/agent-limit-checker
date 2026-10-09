@@ -33,4 +33,10 @@ internal sealed class AutoLaunchRegistry : IAutoLaunchRegistry
         using var key = Registry.CurrentUser.OpenSubKey(StartupApprovedRunKeyPath);
         return key?.GetValue(valueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as byte[];
     }
+
+    public void DeleteStartupApprovedValue(string valueName)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupApprovedRunKeyPath, writable: true);
+        key?.DeleteValue(valueName, throwOnMissingValue: false);
+    }
 }

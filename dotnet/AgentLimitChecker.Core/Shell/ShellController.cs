@@ -174,8 +174,8 @@ public sealed class ShellController : IDisposable
         lock (gate)
         {
             if (disposed) return;
-            autoLaunch.SetEnabled(enabled);
-            if (settings.Load().AutoLaunch != enabled) settings.Save(new JsonObject { ["autoLaunch"] = enabled });
+            if (autoLaunch.SetEnabled(enabled) && settings.Load().AutoLaunch != enabled)
+                settings.Save(new JsonObject { ["autoLaunch"] = enabled });
             Publish();
         }
     }

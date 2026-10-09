@@ -68,6 +68,36 @@ public sealed class AutoLaunchTests
     }
 
     [Fact]
+    public void SetEnabled_ClearsTaskManagerDisableSoTheUserCanEnableAgain()
+    {
+        const string valueName = "com.agent-limit-checker.probe";
+        var registry = new FakeAutoLaunchRegistry();
+        registry.SetRunValue(valueName, "\"C:\\current\\AgentLimitChecker.exe\" --hidden");
+        registry.SetStartupApproved(valueName, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        var service = new RegistryAutoLaunchService(registry, "C:\\current\\AgentLimitChecker.exe", valueName);
+        Assert.False(service.IsEnabled);
+
+        Assert.True(service.SetEnabled(true));
+
+        Assert.True(service.IsEnabled);
+    }
+
+    [Fact]
+    public void Startup_KeepsTaskManagerDisableWhileUpdatingTheExecutablePath()
+    {
+        const string valueName = "com.agent-limit-checker.probe";
+        var registry = new FakeAutoLaunchRegistry();
+        registry.SetRunValue(valueName, "\"C:\\old\\AgentLimitChecker.exe\" --hidden");
+        registry.SetStartupApproved(valueName, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        var service = new RegistryAutoLaunchService(registry, "C:\\current\\AgentLimitChecker.exe", valueName);
+
+        AutoLaunchStartup.Initialize(autoLaunchEnabled: true, debugBuild: false, service, _ => { });
+
+        Assert.Equal("\"C:\\current\\AgentLimitChecker.exe\" --hidden", registry.GetRunValue(valueName));
+        Assert.False(service.IsEnabled);
+    }
+
+    [Fact]
     public void Startup_DoesNotChangeRegistryWhenSettingIsDisabled()
     {
         const string valueName = "com.agent-limit-checker.probe";
@@ -106,8 +136,8 @@ public sealed class AutoLaunchTests
             logError: errors.Add);
 
         Assert.False(service.IsEnabled);
-        service.SetEnabled(true);
-        service.SetEnabled(false);
+        Assert.False(service.SetEnabled(true));
+        Assert.False(service.SetEnabled(false));
 
         Assert.Equal(new[] { "[autoLaunch] isEnabled failed", "[autoLaunch] setEnabled failed", "[autoLaunch] setEnabled failed" }, errors);
     }
@@ -118,6 +148,7 @@ public sealed class AutoLaunchTests
         public byte[]? GetStartupApprovedValue(string valueName) => throw new UnauthorizedAccessException();
         public void SetRunValue(string valueName, string value) => throw new UnauthorizedAccessException();
         public void DeleteRunValue(string valueName) => throw new UnauthorizedAccessException();
+        public void DeleteStartupApprovedValue(string valueName) => throw new UnauthorizedAccessException();
     }
 
     private sealed class FakeAutoLaunchRegistry : IAutoLaunchRegistry
@@ -142,6 +173,9 @@ public sealed class AutoLaunchTests
             DeleteCount++;
             runValues.Remove(valueName);
         }
+
+        public void SetStartupApproved(string valueName, byte[] value) => startupApprovedValues[valueName] = value;
+        public void DeleteStartupApprovedValue(string valueName) => startupApprovedValues.Remove(valueName);
 
         public void ResetCounts()
         {

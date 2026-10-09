@@ -6,6 +6,7 @@ public interface IAutoLaunchRegistry
     void SetRunValue(string valueName, string value);
     void DeleteRunValue(string valueName);
     byte[]? GetStartupApprovedValue(string valueName);
+    void DeleteStartupApprovedValue(string valueName);
 }
 
 public static class AutoLaunchPolicy
@@ -21,7 +22,7 @@ public static class AutoLaunchPolicy
 
 public static class AutoLaunchStartup
 {
-    public static void Initialize(bool autoLaunchEnabled, bool debugBuild, IAutoLaunchService service,
+    public static void Initialize(bool autoLaunchEnabled, bool debugBuild, RegistryAutoLaunchService service,
         Action<string> log)
     {
         if (debugBuild)
@@ -30,6 +31,6 @@ public static class AutoLaunchStartup
             return;
         }
 
-        if (autoLaunchEnabled) service.SetEnabled(true);
+        if (autoLaunchEnabled) service.RegisterCurrentExecutable();
     }
 }
