@@ -161,7 +161,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 - Electron 版と C# 版は単一インスタンスの仕組みが別なので、同時に起動できてしまう。両方が同じ `settings.json` を書き、同じ CLI の資格情報を更新するので、実機で試すときは Electron 版を終了しておく。
 - Electron 版がトレイで動いている間は `npm start` がすぐ終わる(CLAUDE.md「アプリ稼働中の編集」)。見比べるときは portable exe を終了してから起動する。
 - Electron 版が登録した Run キーの値の名前と、`getLoginItemSettings` が見る形式は未確認である。P7 の前に `test/login-item-probe.js` で実際の値を確かめる。
-- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。`.ps1` 経由では `initialize` がタイムアウトする(2026-10-10 に C# 版で確認。PowerShell が標準入力をまとめて読むためと推定)。探索の順は `.cmd` が `.ps1` より先で、npm は両方を作るので、`.ps1` が選ばれるのは `.cmd` が無い環境だけである。Electron 版も同じ順と起動方法である。
+- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。npm の `.ps1` の shim は標準入力を `$input |` で渡すので、`powershell -File` 経由では入力が終わるまで node へ届かず、`initialize` がタイムアウトする。C# 版は、shim と同じ規則で `node` と `node_modules/@openai/codex/bin/codex.js` を直接起動して避ける。Electron 版にはこの対策が無い。
 - 自動アップデートは、%TEMP% からの起動と書き込めない場所(Program Files など)では自動で適用できない。agent-gc と同じく、その場合はブラウザで zip を開く動きにする。
 - 発行の手順の違いに注意する。screen-recorder はタグを先に push し、Release をソースのリポジトリに作る。agent-gc は送信の後にタグを push する。この計画では agent-gc の順に合わせる。
 - `build-package.bat` は Node 22.15 以上と `basic-ftp` を前提にする。`package.json` の `devDependencies` に `basic-ftp` を足す。

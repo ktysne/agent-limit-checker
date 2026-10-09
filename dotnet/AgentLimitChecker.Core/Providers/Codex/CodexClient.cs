@@ -51,10 +51,22 @@ internal sealed class CodexClient
         return child;
     }
 
-    internal static CodexStartInfo BuildStartInfo(string exe, IReadOnlyDictionary<string, string> env, string home)
+    internal static CodexStartInfo BuildStartInfo(string exe, IReadOnlyDictionary<string, string> env, string home, Func<string, bool>? fileExists = null)
     {
         if (exe.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
+        {
+            // npm の .ps1 の shim は標準入力を `$input |` で渡すため、入力が終わるまで node へ届かず initialize が返らない。
+            // shim と同じ規則で node と codex.js を直接起動する。
+            fileExists ??= File.Exists;
+            var dir = Path.GetDirectoryName(exe) ?? "";
+            var script = Path.Combine(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
+            if (fileExists(script))
+            {
+                var localNode = Path.Combine(dir, "node.exe");
+                return new(fileExists(localNode) ? localNode : "node.exe", $"\"{script}\" app-server", BuildChildEnv(env, home));
+            }
             return new("powershell.exe", $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{exe}\" app-server", BuildChildEnv(env, home));
+        }
         if (exe.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || exe.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
             return new(CliPaths.Get(env, "ComSpec") ?? "cmd.exe", $"/d /s /c \"\"{exe}\" app-server\"", BuildChildEnv(env, home));
         return new(exe, "app-server", BuildChildEnv(env, home));

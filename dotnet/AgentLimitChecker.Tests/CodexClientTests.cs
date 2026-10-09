@@ -160,6 +160,16 @@ public sealed class CodexClientTests
         Assert.False(info.Environment.ContainsKey("SECRET_TOKEN")); Assert.False(info.Environment.ContainsKey("ComSpec"));
         Assert.Equal(exe.EndsWith(".ps1", StringComparison.Ordinal) ? "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"codex.ps1\" app-server" : host == "cmd.exe" ? $"/d /s /c \"\"{exe}\" app-server\"" : "app-server", info.Arguments);
     }
+    [Theory] [InlineData(true)] [InlineData(false)]
+    public void StartInfo_RunsCodexJsDirectlyForNpmPs1Shim(bool bundledNode)
+    {
+        var dir = Path.Combine("C:", "npm"); var exe = Path.Combine(dir, "codex.ps1");
+        var script = Path.Combine(dir, "node_modules", "@openai", "codex", "bin", "codex.js"); var localNode = Path.Combine(dir, "node.exe");
+        var info = CodexClient.BuildStartInfo(exe, new Dictionary<string, string> { ["PATH"] = "path" }, "home", p => p == script || (bundledNode && p == localNode));
+        Assert.Equal(bundledNode ? localNode : "node.exe", info.FileName);
+        Assert.Equal($"\"{script}\" app-server", info.Arguments);
+        Assert.Equal("home", info.Environment["CODEX_HOME"]);
+    }
     [Fact] public async Task Provider_NormalizesHomesAndShutsDownOneOrAll()
     {
         using var directory = new ProviderTestDirectory(); var processes = new List<FakeProcess>();
