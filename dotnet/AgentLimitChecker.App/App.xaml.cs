@@ -105,11 +105,19 @@ public partial class App : System.Windows.Application
         }
 
         var settings = new SettingsStore(_logger.Error);
+        var autoLaunch = new RegistryAutoLaunchService(new AutoLaunchRegistry(),
+            Environment.ProcessPath ?? throw new InvalidOperationException("実行ファイルのパスを取得できません。"),
+            logError: _logger.Error);
+#if DEBUG
+        AutoLaunchStartup.Initialize(settings.Load().AutoLaunch, debugBuild: true, autoLaunch, _logger.Info);
+#else
+        AutoLaunchStartup.Initialize(settings.Load().AutoLaunch, debugBuild: false, autoLaunch, _logger.Info);
+#endif
         var claude = new ClaudeProvider();
         var codex = new CodexProvider();
         var notifier = new NtfyResetNotifier(settings.Load, logger: _logger);
         _shell = new ShellController(settings, ShellProviders.Create(claude, codex), new ShellRuntime(_logger.Error),
-            new LoginLauncher(_logger), new SettingsAutoLaunchService(settings), notifier.Update, notifier.Dispose, GetVersion(), _logger.Info);
+            new LoginLauncher(_logger), autoLaunch, notifier.Update, notifier.Dispose, GetVersion(), _logger.Info);
         _details = new PopoverDetailsPresenter(_shell, () => _notifyIcon, Shutdown);
         _shell.SnapshotChanged += snapshot => Dispatcher.BeginInvoke(() => UpdateTray(snapshot));
         _shell.ShowDetailsRequested += () => Dispatcher.BeginInvoke(() => RequestDetails(show: true));

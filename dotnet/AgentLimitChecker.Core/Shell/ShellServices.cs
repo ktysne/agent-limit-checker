@@ -18,10 +18,31 @@ public interface IAutoLaunchService
     void SetEnabled(bool enabled);
 }
 
-public sealed class SettingsAutoLaunchService(SettingsStore store) : IAutoLaunchService
+public sealed class RegistryAutoLaunchService(
+    IAutoLaunchRegistry registry,
+    string executablePath,
+    string valueName = AutoLaunchPolicy.DefaultValueName,
+    Action<string>? logError = null) : IAutoLaunchService
 {
-    public bool IsEnabled => store.Load().AutoLaunch;
-    public void SetEnabled(bool enabled) => store.Save(new JsonObject { ["autoLaunch"] = enabled });
+    // レジストリの失敗で起動や設定の操作を止めない。読めなければ無効として扱う。
+    public bool IsEnabled
+    {
+        get
+        {
+            try { return AutoLaunchPolicy.IsEnabled(registry.GetRunValue(valueName), registry.GetStartupApprovedValue(valueName)); }
+            catch (Exception) { logError?.Invoke("[autoLaunch] isEnabled failed"); return false; }
+        }
+    }
+
+    public void SetEnabled(bool enabled)
+    {
+        try
+        {
+            if (enabled) registry.SetRunValue(valueName, AutoLaunchPolicy.BuildValue(executablePath));
+            else registry.DeleteRunValue(valueName);
+        }
+        catch (Exception) { logError?.Invoke("[autoLaunch] setEnabled failed"); }
+    }
 }
 
 public interface ILoginLauncher

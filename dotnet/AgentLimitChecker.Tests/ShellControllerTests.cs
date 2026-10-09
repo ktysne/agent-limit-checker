@@ -12,6 +12,12 @@ public sealed class ShellControllerTests
 {
     private static UsageSnapshot Usage(double utilization = .5) => new(new(utilization, 2000000), null, [], null, null, "Pro");
 
+    private sealed class FakeAutoLaunchService : IAutoLaunchService
+    {
+        public bool IsEnabled { get; private set; }
+        public void SetEnabled(bool enabled) => IsEnabled = enabled;
+    }
+
     [Fact]
     public void InitialSnapshotExposesDefaultHomeSettingsVersionThemeAndEmptyLoginProgress()
     {
@@ -412,7 +418,7 @@ public sealed class ShellControllerTests
                 FetchClaude = () => ClaudeFetch(), FetchCodex = home => CodexFetch(home), DiscoverHomes = () => Homes,
                 DefaultAccount = () => Default, ClaudeCredentialsFile = "C:/test/claude/.credentials.json",
                 ShutdownCodex = home => StoppedHomes.Add(home), ShutdownClaude = () => ClaudeShutdowns++
-            }, Runtime, Launcher, new SettingsAutoLaunchService(Settings), snapshot => Notifications.Add(snapshot),
+            }, Runtime, Launcher, new FakeAutoLaunchService(), snapshot => Notifications.Add(snapshot),
                 () => NotificationDisposals++, "4.0.0", Logs.Add);
         }
 
