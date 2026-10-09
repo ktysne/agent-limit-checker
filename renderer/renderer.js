@@ -72,7 +72,7 @@ function renderBucket(label, limit, { compact = false } = {}) {
   return `
     <div class="${cls}">
       <div class="bucket-row">
-        <span class="bucket-label">${label}</span>
+        <span class="bucket-label" title="${label}">${label}</span>
         <span class="bucket-value ${colorCls}">${pct}</span>
       </div>
       <div class="progress"><div class="progress-fill ${colorCls}" style="width:${width}%"></div></div>
