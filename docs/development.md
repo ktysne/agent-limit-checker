@@ -9,6 +9,7 @@
 - .NET 10 SDK をインストールしてください。
 - `build-package.bat` と Node.js のテストには Node.js 22.15 以上が必要です。
 - パッケージ発行には Git と、ルートで `npm install` して用意する `basic-ftp` が必要です。
+- アップロードまで行う場合は GitHub CLI(`gh`)も必要です。`gh auth login` で `ktysne/agent-limit-checker` に Release を作れるアカウントにログインし、`gh auth status` で確かめてから実行してください。zip とページをローカルに作るだけなら不要です。
 
 ## リポジトリ構成
 
@@ -75,6 +76,7 @@ Release ビルドは設定で自動起動が有効な場合、起動時に Run �
 配布 zip が `AgentLimitChecker.exe`、`manual.html`、`license.html` の 3 ファイルだけを含むことを確認し、`update-v2.json` を作って C# 側の manifest テストでも受け入れられることを検証します。
 
 アップロードを選ぶと、スクリプトはビルドしたコミットを指す注釈付きタグ `vX.Y.0` を作成して push し、その後に GitHub Release とサイトを更新します。
+タグの push の後で `gh` が使えないと、タグだけが公開されて Release とサイトが更新されないため、事前に `gh auth status` を確かめてください。
 Release 作成時に既存タグを検証するため、Release を作る前にタグをリモートへ置きます。
 アップロードを選ばなければ、作成した zip とサイト用ファイルをローカルに残します。
 
