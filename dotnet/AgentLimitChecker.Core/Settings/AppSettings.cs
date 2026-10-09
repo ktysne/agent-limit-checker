@@ -11,6 +11,9 @@ public sealed class AppSettings
     [JsonPropertyName("autoLaunch")]
     public bool AutoLaunch { get; init; }
 
+    [JsonPropertyName("checkForUpdatesOnStartup")]
+    public bool CheckForUpdatesOnStartup { get; init; } = true;
+
     [JsonPropertyName("ntfy")]
     public NtfySettings Ntfy { get; init; } = new();
 

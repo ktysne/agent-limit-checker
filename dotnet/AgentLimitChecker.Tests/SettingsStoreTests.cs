@@ -10,6 +10,7 @@ public sealed class SettingsStoreTests
         {
           "pollingIntervalSec": 300,
           "autoLaunch": false,
+          "checkForUpdatesOnStartup": true,
           "ntfy": {
             "topicUrl": "",
             "accessToken": "",
@@ -182,7 +183,8 @@ public sealed class SettingsStoreTests
         Assert.Equal("レビュー用", settings.CodexAccountNames[".codex-review"]);
         store.Save(new JsonObject());
 
-        Assert.Equal(FullSettingsJson, File.ReadAllText(path, Encoding.UTF8));
+        Assert.Equal(FullSettingsJson.Replace("  \"ntfy\":", "  \"checkForUpdatesOnStartup\": true,\n  \"ntfy\":"),
+            File.ReadAllText(path, Encoding.UTF8));
     }
 
     [Fact]

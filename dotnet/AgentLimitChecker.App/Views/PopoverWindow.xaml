@@ -208,6 +208,11 @@
      <Grid Margin="0,0,0,8"><TextBlock Text="ログイン時に自動起動" FontSize="12" Foreground="{DynamicResource Label}" VerticalAlignment="Center"/>
       <CheckBox x:Name="AutoLaunch" Style="{StaticResource Switch}" HorizontalAlignment="Right" Click="OnAutoLaunch" AutomationProperties.Name="ログイン時に自動起動"/>
      </Grid>
+     <Grid Margin="0,0,0,8"><TextBlock Text="起動時にアップデートを確認" FontSize="12" Foreground="{DynamicResource Label}" VerticalAlignment="Center"/>
+      <CheckBox x:Name="CheckUpdatesOnStartup" Style="{StaticResource Switch}" HorizontalAlignment="Right" Click="OnCheckUpdatesSetting" AutomationProperties.Name="起動時にアップデートを確認"/>
+     </Grid>
+     <Button x:Name="CheckUpdatesButton" Content="アップデートを確認" Style="{StaticResource TextButton}" HorizontalAlignment="Left" Click="OnCheckUpdates"/>
+     <TextBlock x:Name="UpdateStatus" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Label}" Margin="0,4,0,8"/>
      <Border x:Name="NamesGroup" BorderBrush="{DynamicResource FieldBorder}" BorderThickness="0,1,0,0" Margin="0,2,0,8" Padding="0,8,0,0">
       <StackPanel><TextBlock Text="Codex 表示名" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
        <StackPanel x:Name="NameFields"/>

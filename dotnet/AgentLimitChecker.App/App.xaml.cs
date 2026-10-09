@@ -1,4 +1,7 @@
 using System.Drawing;
+using System.IO;
+using AgentLimitChecker.App.Updates;
+using AgentLimitChecker.Core.Updates;
 using System.Reflection;
 using System.Threading;
 using System.Windows;
@@ -30,6 +33,8 @@ public partial class App : System.Windows.Application
     private Icon? _trayIcon;
     private ShellController? _shell;
     private IDetailsPresenter? _details;
+    private AppUpdateController? _updates;
+    private UpdateMonitor? _updateMonitor;
     private bool _exiting;
     private ShellSnapshot? _lastTraySnapshot;
 
@@ -61,6 +66,14 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // 適用役は旧版が動いている間に起動するため、通常起動の Mutex を取得しない。
+        var updateCommand = UpdateCommandLine.Parse(e.Args);
+        if (updateCommand.Kind is UpdateCommandKind.Apply or UpdateCommandKind.InvalidApply)
+        {
+            RunUpdateApplier(updateCommand);
+            return;
+        }
 
         if (e.Args.Length == 2 && e.Args[0] == "--export-tray-icons")
         {
@@ -118,13 +131,30 @@ public partial class App : System.Windows.Application
         var notifier = new NtfyResetNotifier(settings.Load, logger: _logger);
         _shell = new ShellController(settings, ShellProviders.Create(claude, codex), new ShellRuntime(_logger.Error),
             new LoginLauncher(_logger), autoLaunch, notifier.Update, notifier.Dispose, GetVersion(), _logger.Info);
-        _details = new PopoverDetailsPresenter(_shell, () => _notifyIcon, Shutdown);
+        _updates = new AppUpdateController(GetVersion(), Shutdown, _logger.Info);
+        _updateMonitor = new UpdateMonitor(new ShellRuntime(_logger.Error), _updates.CheckAsync);
+        _updateMonitor.Changed += _ => Dispatcher.BeginInvoke(() =>
+        {
+            if (_exiting || _shell is null) return;
+            RebuildMenu(_shell.Snapshot);
+        });
+        _updateMonitor.UpdateFound += update => Dispatcher.BeginInvoke(() =>
+        {
+            if (_exiting || _notifyIcon is null) return;
+            _notifyIcon.ShowBalloonTip(5000, "アップデートがあります", $"バージョン {update.VersionText} に更新できます。", Forms.ToolTipIcon.Info);
+        });
+        _details = new PopoverDetailsPresenter(_shell, () => _notifyIcon, Shutdown, _updateMonitor,
+            () => { if (!_exiting && _updateMonitor.Snapshot.Available is { } update) _updates.ShowPrompt(update); });
+        _shell.SnapshotChanged += snapshot => _updateMonitor.SetAutomaticChecks(snapshot.Settings.CheckForUpdatesOnStartup);
         _shell.SnapshotChanged += snapshot => Dispatcher.BeginInvoke(() => UpdateTray(snapshot));
         _shell.ShowDetailsRequested += () => Dispatcher.BeginInvoke(() => RequestDetails(show: true));
         ShowTrayIcon();
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         UpdateTheme();
+        SignalUpdatedStartup(updateCommand);
+        _updates.StartBackgroundCleanup();
+        _ = _updateMonitor.StartAsync(settings.Load().CheckForUpdatesOnStartup);
         await _shell.StartAsync();
     }
 
@@ -135,6 +165,7 @@ public partial class App : System.Windows.Application
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _activationWait?.Unregister(null);
         (_details as IDisposable)?.Dispose();
+        _updateMonitor?.Dispose();
         _shell?.Dispose();
         if (_notifyIcon is not null) _notifyIcon.Visible = false;
         _notifyIcon?.Dispose();
@@ -192,6 +223,16 @@ public partial class App : System.Windows.Application
         var font = System.Drawing.SystemFonts.MenuFont ?? new Font("Segoe UI", 9f, System.Drawing.FontStyle.Regular, GraphicsUnit.Point);
         var menu = new Forms.ContextMenuStrip { Font = font, Renderer = new TrayMenuRenderer() };
         menu.Disposed += (_, _) => font.Dispose();
+        if (_updateMonitor?.Snapshot.MenuLabel is { } label)
+        {
+            var updateItem = new Forms.ToolStripMenuItem(label);
+            updateItem.Click += (_, _) =>
+            {
+                if (!_exiting && _updateMonitor.Snapshot.Available is { } update) _updates?.ShowPrompt(update);
+            };
+            menu.Items.Add(updateItem);
+            menu.Items.Add(new Forms.ToolStripSeparator());
+        }
         foreach (var item in TrayPresentation.Menu(snapshot)) menu.Items.Add(CreateMenuItem(item));
         var previous = _contextMenu;
         _contextMenu = menu;
@@ -247,6 +288,38 @@ public partial class App : System.Windows.Application
     {
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
         _shell?.SetTheme(key?.GetValue("AppsUseLightTheme") is int value && value == 0 ? "dark" : "light");
+    }
+
+    private void RunUpdateApplier(UpdateCommandLine command)
+    {
+        var root = AppUpdateController.UpdateRootDirectory;
+        var log = new UpdateApplyLog(Path.Combine(root, UpdateLayout.ApplyLogFileName(UpdateApplyArguments.LogIdFor(command))));
+        int exitCode;
+        try
+        {
+            exitCode = new UpdateApplyOrchestrator(new FileSystemUpdateFileOperations(),
+                new WindowsUpdateProcessOperations(), new MessageBoxApplyReporter(log), root, GetVersion()).Run(command);
+        }
+        catch (Exception ex)
+        {
+            log.Write($"適用役で予期しないエラーが発生しました: {ex}");
+            exitCode = UpdateApplyOrchestrator.FailureExitCode;
+        }
+        Shutdown(exitCode);
+    }
+
+    private static void SignalUpdatedStartup(UpdateCommandLine command)
+    {
+        if (command.Kind != UpdateCommandKind.Updated || command.UpdateId is null) return;
+        try
+        {
+            if (EventWaitHandle.TryOpenExisting(UpdateLayout.StartupEventName(command.UpdateId), out var signal))
+                using (signal) signal.Set();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
+        {
+            // 合図が届かなくても、適用役は一定時間の生存で起動成功を判定する。
+        }
     }
 
     private static string GetVersion()
