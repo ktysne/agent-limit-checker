@@ -76,7 +76,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 | 順 | 対象 | 主な変更先 | 区分 | ブランチ | base | PR | 状態 |
 |---|---|---|---|---|---|---|---|
-| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | 未作成 | 作業中(2026-10-10) |
+| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | レビュー待ち(2026-10-10) |
 | P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | 未作成 | 未着手 |
 | P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | 未作成 | 未着手 |
 | P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | 未作成 | 未着手 |
