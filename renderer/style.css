@@ -243,9 +243,22 @@ html.clamped {
   color: var(--label);
 }
 
+.bucket-row .bucket-label {
+  flex: 1;
+  min-width: 0;
+  margin-right: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bucket-value {
   font-weight: 700;
   font-size: 13px;
+}
+
+.bucket-row .bucket-value {
+  flex-shrink: 0;
 }
 
 .bucket-value.ok { color: #4caf50; }
