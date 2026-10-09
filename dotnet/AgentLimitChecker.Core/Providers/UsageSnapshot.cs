@@ -15,7 +15,7 @@ public sealed record UsageSnapshot(RateLimit? FiveHour, RateLimit? Weekly,
     IReadOnlyList<WeeklyScopedLimit> WeeklyScoped, CreditBalance? Credits,
     ResetCreditBalance? ResetCredits, string? Plan, CloudCreditBalance? CloudCredit = null);
 
-public sealed class ProviderException(string code, string message, bool restartable = false) : Exception(message)
+public class ProviderException(string code, string message, bool restartable = false) : Exception(message)
 {
     public string Code { get; } = code;
     public bool Restartable { get; } = restartable;
