@@ -97,9 +97,9 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 | 順 | 対象 | 主な変更先 | 区分 | ブランチ | base | PR | 状態 |
 |---|---|---|---|---|---|---|---|
-| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | レビュー待ち(2026-10-10) |
-| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | 未作成 | 未着手 |
-| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | 未作成 | 未着手 |
+| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | マージ済み(2026-10-10 確認) |
+| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | [#50](https://github.com/ktysne/agent-limit-checker/pull/50) | レビュー収束、マージ待ち(2026-10-10) |
+| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | 作成予定 | 実装済み、PR 作成中(2026-10-10) |
 | P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | 未作成 | 未着手 |
 | P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | 未作成 | 未着手 |
 | P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | 未作成 | 未着手 |
@@ -161,7 +161,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 - Electron 版と C# 版は単一インスタンスの仕組みが別なので、同時に起動できてしまう。両方が同じ `settings.json` を書き、同じ CLI の資格情報を更新するので、実機で試すときは Electron 版を終了しておく。
 - Electron 版がトレイで動いている間は `npm start` がすぐ終わる(CLAUDE.md「アプリ稼働中の編集」)。見比べるときは portable exe を終了してから起動する。
 - Electron 版が登録した Run キーの値の名前と、`getLoginItemSettings` が見る形式は未確認である。P7 の前に `test/login-item-probe.js` で実際の値を確かめる。
-- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。
+- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。`.ps1` 経由では `initialize` がタイムアウトする(2026-10-10 に C# 版で確認。PowerShell が標準入力をまとめて読むためと推定)。探索の順は `.cmd` が `.ps1` より先で、npm は両方を作るので、`.ps1` が選ばれるのは `.cmd` が無い環境だけである。Electron 版も同じ順と起動方法である。
 - 自動アップデートは、%TEMP% からの起動と書き込めない場所(Program Files など)では自動で適用できない。agent-gc と同じく、その場合はブラウザで zip を開く動きにする。
 - 発行の手順の違いに注意する。screen-recorder はタグを先に push し、Release をソースのリポジトリに作る。agent-gc は送信の後にタグを push する。この計画では agent-gc の順に合わせる。
 - `build-package.bat` は Node 22.15 以上と `basic-ftp` を前提にする。`package.json` の `devDependencies` に `basic-ftp` を足す。
