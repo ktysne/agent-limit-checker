@@ -36,14 +36,15 @@ public sealed class RegistryAutoLaunchService(
     }
 
     // 利用者が有効にしたときは、タスク マネージャーで無効にした印も消す。Electron の setLoginItemSettings と同じ扱いである。
+    // 印を先に消すのは、そこで失敗したときに Run 値を書き換えずに済ませるためである。
     public bool SetEnabled(bool enabled)
     {
         try
         {
             if (enabled)
             {
-                registry.SetRunValue(valueName, AutoLaunchPolicy.BuildValue(executablePath));
                 registry.DeleteStartupApprovedValue(valueName);
+                registry.SetRunValue(valueName, AutoLaunchPolicy.BuildValue(executablePath));
             }
             else registry.DeleteRunValue(valueName);
             return true;

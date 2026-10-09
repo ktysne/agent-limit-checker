@@ -142,6 +142,30 @@ public sealed class AutoLaunchTests
         Assert.Equal(new[] { "[autoLaunch] isEnabled failed", "[autoLaunch] setEnabled failed", "[autoLaunch] setEnabled failed" }, errors);
     }
 
+    [Fact]
+    public void SetEnabled_LeavesTheRunValueUntouchedWhenTheStartupApprovalCannotBeCleared()
+    {
+        const string valueName = "com.agent-limit-checker.probe";
+        const string existingValue = @"""C:\old\AgentLimitChecker.exe"" --hidden";
+        var registry = new StartupApprovalLockedRegistry();
+        registry.SetRunValue(valueName, existingValue);
+        var service = new RegistryAutoLaunchService(registry, @"C:\current\AgentLimitChecker.exe", valueName);
+
+        Assert.False(service.SetEnabled(true));
+
+        Assert.Equal(existingValue, registry.GetRunValue(valueName));
+    }
+
+    private sealed class StartupApprovalLockedRegistry : IAutoLaunchRegistry
+    {
+        private readonly Dictionary<string, string> runValues = new(StringComparer.Ordinal);
+        public string? GetRunValue(string valueName) => runValues.GetValueOrDefault(valueName);
+        public byte[]? GetStartupApprovedValue(string valueName) => null;
+        public void SetRunValue(string valueName, string value) => runValues[valueName] = value;
+        public void DeleteRunValue(string valueName) => runValues.Remove(valueName);
+        public void DeleteStartupApprovedValue(string valueName) => throw new UnauthorizedAccessException();
+    }
+
     private sealed class FailingAutoLaunchRegistry : IAutoLaunchRegistry
     {
         public string? GetRunValue(string valueName) => throw new UnauthorizedAccessException();
