@@ -17,9 +17,9 @@ function formatWeeklyPace(limit, now) {
   const todayLeft = (100 / WEEKLY_WINDOW_DAYS) * (8 - remainingDays) - utilizationPercent;
   const perDay = Math.max(0, 100 - utilizationPercent) / remainingDays;
   if (Number(todayLeft.toFixed(1)) <= 0) {
-    return `今日の枠 超過 · 以降${perDay.toFixed(1)}%/日`;
+    return `今日の枠 超過 · ${remainingDays}日均等なら${perDay.toFixed(1)}%/日`;
   }
-  return `今日あと${todayLeft.toFixed(1)}% · 以降${perDay.toFixed(1)}%/日`;
+  return `今日あと${todayLeft.toFixed(1)}% · ${remainingDays}日均等なら${perDay.toFixed(1)}%/日`;
 }
 
 function formatWeeklyLabel(limit, now, escapedScopeLabel = null) {
