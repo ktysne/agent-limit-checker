@@ -20,16 +20,19 @@ public sealed class SettingsStore
     private readonly string settingsPath;
     private AppSettings? cache;
 
-    public SettingsStore() : this(Path.Combine(
+    private readonly Action<string> logError;
+
+    public SettingsStore(Action<string>? logError = null) : this(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "agent-limit-checker",
-        "settings.json"))
+        "settings.json"), logError)
     {
     }
 
-    public SettingsStore(string settingsPath)
+    public SettingsStore(string settingsPath, Action<string>? logError = null)
     {
         this.settingsPath = Path.GetFullPath(settingsPath);
+        this.logError = logError ?? (_ => { });
     }
 
     public AppSettings Load()
@@ -72,13 +75,15 @@ public sealed class SettingsStore
             }
         }
 
+        // 書き込みに失敗しても稼働中は新しい設定で動かす(Electron 版と同じ)。失敗はログにだけ残す。
         cache = Normalize(merged);
         try
         {
             WriteAtomically(JsonSerializer.Serialize(cache, SerializerOptions));
         }
-        catch
+        catch (Exception)
         {
+            logError("[settings] failed to write");
         }
         return cache;
     }

@@ -230,6 +230,7 @@ public sealed class NtfyResetNotifier : IDisposable
         NotificationEvent notificationEvent;
         int attempts;
         NtfySettings config;
+        InFlightEvent flight;
         lock (gate)
         {
             if (disposed || !timers.TryGetValue(key, out var current) || !ReferenceEquals(current, expected)) return;
@@ -269,11 +270,12 @@ public sealed class NtfyResetNotifier : IDisposable
 
             var identity = EventIdentity(notificationEvent);
             if (inFlight.ContainsKey(identity)) return;
-            inFlight[identity] = new InFlightEvent(notificationEvent);
+            flight = new InFlightEvent(notificationEvent);
+            inFlight[identity] = flight;
         }
 
+        // inFlight は gate の外で読まない。別の通知の発火と送信の完了が並行して辞書を書き換えるため。
         var identityForSend = EventIdentity(notificationEvent);
-        var flight = inFlight[identityForSend];
         try
         {
             var message = notificationEvent.Kind == NotificationKind.ResetCreditsExpiry

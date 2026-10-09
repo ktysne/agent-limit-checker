@@ -151,6 +151,24 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public void Save_KeepsNewSettingsInMemoryAndLogsWhenTheFileCannotBeWritten()
+    {
+        using var directory = new ProviderTestDirectory();
+        // 設定ファイルの場所にディレクトリがあると、置き換えが必ず失敗する。
+        var path = Path.Combine(directory.Root, "settings.json");
+        Directory.CreateDirectory(path);
+        var errors = new List<string>();
+        var store = new SettingsStore(path, errors.Add);
+
+        var saved = store.Save(new JsonObject { ["pollingIntervalSec"] = 60 });
+
+        Assert.Equal(60, saved.PollingIntervalSec);
+        Assert.Equal(60, store.Load().PollingIntervalSec);
+        Assert.Equal(["[settings] failed to write"], errors);
+        Assert.True(Directory.Exists(path));
+    }
+
+    [Fact]
     public void LoadAndSave_PreserveFullyPopulatedElectronSettingsJson()
     {
         using var directory = new ProviderTestDirectory();
