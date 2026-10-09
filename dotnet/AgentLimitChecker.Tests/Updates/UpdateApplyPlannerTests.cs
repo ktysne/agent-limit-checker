@@ -142,6 +142,23 @@ public class UpdateApplyPlannerTests
     }
 
     [Fact]
+    public void Execute_WhenCopyFails_LeavesExistingExecutableInPlaceWithoutBackup()
+    {
+        var files = CreateFiles("AgentLimitChecker.exe");
+        files.AddFile(InInstall("AgentLimitChecker.exe"), "old");
+        files.FailCopyTo.Add(Staged("AgentLimitChecker.exe"));
+        var plan = MakePlan(files, "AgentLimitChecker.exe");
+
+        var result = UpdateApplyPlanner.Execute(plan, files);
+
+        Assert.False(result.Succeeded);
+        Assert.True(result.RollbackSucceeded);
+        Assert.Equal("old", files.Files[InInstall("AgentLimitChecker.exe")]);
+        Assert.False(files.FileExists(Backup("AgentLimitChecker.exe")));
+        Assert.False(files.FileExists(Staged("AgentLimitChecker.exe")));
+    }
+
+    [Fact]
     public void Execute_WhenLaterCopyFails_RestoresEarlierItemsInReverseOrder()
     {
         var files = CreateFiles("AgentLimitChecker.exe", "license.html", "manual.html");
@@ -183,7 +200,8 @@ public class UpdateApplyPlannerTests
         Assert.False(result.Succeeded);
         Assert.True(result.RollbackSucceeded);
         Assert.Equal("old", files.Files[InInstall("AgentLimitChecker.exe")]);
-        Assert.DoesNotContain(files.Operations, op => op.StartsWith("delete", StringComparison.Ordinal));
+        Assert.DoesNotContain($"delete {InInstall("AgentLimitChecker.exe")}", files.Operations);
+        Assert.False(files.FileExists(Staged("AgentLimitChecker.exe")));
     }
 
     [Fact]

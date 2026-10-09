@@ -70,7 +70,7 @@ public sealed class UpdatePreparationService
         progress?.Report(new UpdatePreparationProgress(UpdatePreparationStage.Preparing));
         Directory.CreateDirectory(_updateRootDirectory);
 
-        if (await FindReusableAsync(update, cancellationToken).ConfigureAwait(false) is { } reused)
+        if (await FindReusableAsync(update, progress, cancellationToken).ConfigureAwait(false) is { } reused)
         {
             _log($"準備済みの更新を再利用します: {reused.UpdateDirectory}");
             progress?.Report(new UpdatePreparationProgress(UpdatePreparationStage.Ready));
@@ -129,7 +129,10 @@ public sealed class UpdatePreparationService
             throw;
         }
     }
-    private async Task<PreparedUpdate?> FindReusableAsync(UpdateInfo update, CancellationToken cancellationToken)
+    private async Task<PreparedUpdate?> FindReusableAsync(
+        UpdateInfo update,
+        IProgress<UpdatePreparationProgress>? progress,
+        CancellationToken cancellationToken)
     {
         var listing = _files.ListDirectory(_updateRootDirectory);
         if (listing is null)
@@ -154,10 +157,8 @@ public sealed class UpdatePreparationService
                 continue;
             }
 
-            var stagingDirectory = Path.Combine(updateDirectory, UpdateLayout.StagingDirectoryName);
             var packagePath = Path.Combine(updateDirectory, UpdateLayout.PackageFileName(update.VersionText));
-            if (!_files.FileExists(packagePath)
-                || !_files.FileExists(Path.Combine(stagingDirectory, UpdateLayout.ExecutableFileName)))
+            if (!_files.FileExists(packagePath))
             {
                 continue;
             }
@@ -174,11 +175,73 @@ public sealed class UpdatePreparationService
 
             if (UpdateSha256.Matches(actual, update.Sha256))
             {
-                return new PreparedUpdate(name, updateDirectory, stagingDirectory, Reused: true);
+                return await RecreateReusableUpdateAsync(
+                    update,
+                    packagePath,
+                    updateDirectory,
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
         return null;
+    }
+
+    private async Task<PreparedUpdate> RecreateReusableUpdateAsync(
+        UpdateInfo update,
+        string packagePath,
+        string previousUpdateDirectory,
+        IProgress<UpdatePreparationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var updateId = UpdateLayout.NewUpdateId();
+        var updateDirectory = Path.Combine(_updateRootDirectory, updateId);
+        var stagingDirectory = Path.Combine(updateDirectory, UpdateLayout.StagingDirectoryName);
+        Directory.CreateDirectory(updateDirectory);
+        try
+        {
+            var reusedPackagePath = Path.Combine(updateDirectory, UpdateLayout.PackageFileName(update.VersionText));
+            if (!_files.CopyFile(packagePath, reusedPackagePath))
+            {
+                throw new UpdatePreparationException("再利用する更新ファイルを複製できませんでした。");
+            }
+
+            var actual = await UpdateSha256.ComputeFileHexAsync(reusedPackagePath, cancellationToken).ConfigureAwait(false);
+            if (!UpdateSha256.Matches(actual, update.Sha256))
+            {
+                throw new UpdatePreparationException("再利用する更新ファイルが配布情報と一致しません。");
+            }
+
+            progress?.Report(new UpdatePreparationProgress(UpdatePreparationStage.Extracting));
+            await ExtractAsync(reusedPackagePath, stagingDirectory, cancellationToken).ConfigureAwait(false);
+
+            var prepared = UpdateRecordSerializer.Serialize(new UpdatePreparedRecord(update.VersionText, actual));
+            if (!_files.WriteNewFileAtomically(Path.Combine(updateDirectory, UpdateLayout.PreparedRecordFileName), prepared))
+            {
+                throw new UpdatePreparationException("再利用した準備の記録を書き込めませんでした。");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!_files.DeleteDirectoryTree(updateDirectory))
+            {
+                _log($"再利用に失敗したフォルダーを削除できませんでした: {updateDirectory}");
+            }
+
+            if (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                throw new UpdatePreparationException($"更新ファイルを保存できませんでした: {ex.Message}", ex);
+            }
+
+            throw;
+        }
+
+        if (!_files.DeleteDirectoryTree(previousUpdateDirectory))
+        {
+            _log($"使い終えた更新フォルダーを削除できませんでした: {previousUpdateDirectory}");
+        }
+
+        return new PreparedUpdate(updateId, updateDirectory, stagingDirectory, Reused: true);
     }
 
     private static async Task ExtractAsync(string packagePath, string stagingDirectory, CancellationToken cancellationToken)

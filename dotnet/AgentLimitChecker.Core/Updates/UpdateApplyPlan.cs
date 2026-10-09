@@ -79,31 +79,36 @@ public static class UpdateApplyPlanner
         for (; index < plan.Items.Count; index++)
         {
             var item = plan.Items[index];
+            if (item.ReplaceExisting && !operations.CanOpenExclusively(item.DestinationPath))
+            {
+                error = $"ファイルを排他で開けません: {item.DestinationPath}";
+                break;
+            }
+
+            var stagedPath = StagedCopyPath(item, plan.UpdateId);
+            // 中断されても既存の実行ファイルを欠かさないよう、複製を完了してから退避する。
+            if (!operations.CopyFile(item.SourcePath, stagedPath))
+            {
+                error = $"ファイルを複製できません: {item.DestinationPath}";
+                break;
+            }
+
             if (item.ReplaceExisting)
             {
-                if (!operations.CanOpenExclusively(item.DestinationPath))
-                {
-                    error = $"ファイルを排他で開けません: {item.DestinationPath}";
-                    break;
-                }
-
                 if (!operations.MoveFile(item.DestinationPath, item.BackupPath))
                 {
+                    operations.DeleteFile(stagedPath);
                     error = $"既存のファイルを退避できません: {item.DestinationPath}";
                     break;
                 }
 
                 backedUp[index] = true;
             }
+
             if (operations.PathExists(item.DestinationPath))
             {
+                operations.DeleteFile(stagedPath);
                 error = $"置き換え先に予期しないファイルがあります: {item.DestinationPath}";
-                break;
-            }
-            var stagedPath = StagedCopyPath(item, plan.UpdateId);
-            if (!operations.CopyFile(item.SourcePath, stagedPath))
-            {
-                error = $"ファイルを複製できません: {item.DestinationPath}";
                 break;
             }
 

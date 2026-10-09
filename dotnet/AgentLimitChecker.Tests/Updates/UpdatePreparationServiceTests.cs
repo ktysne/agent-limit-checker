@@ -112,7 +112,7 @@ public sealed class UpdatePreparationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareAsync_ReusesPreparedFolderWithSameVersionAndHash()
+    public async Task PrepareAsync_ReusesZipAndExtractsIntoANewFolderWithSameVersionAndHash()
     {
         var zip = CreateZip(("AgentLimitChecker.exe", "exe"));
         var info = Info(zip);
@@ -122,7 +122,9 @@ public sealed class UpdatePreparationServiceTests : IDisposable
         var second = await PrepareAsync(downloader, info);
 
         Assert.True(second.Reused);
-        Assert.Equal(first.UpdateId, second.UpdateId);
+        Assert.NotEqual(first.UpdateId, second.UpdateId);
+        Assert.Equal(Path.Combine(_updateRoot, second.UpdateId, "app"), second.StagingDirectory);
+        Assert.False(Directory.Exists(first.UpdateDirectory));
         Assert.Equal(0, downloader.CallCount);
     }
 
@@ -141,16 +143,37 @@ public sealed class UpdatePreparationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareAsync_DoesNotReuseWhenExecutableIsMissing()
+    public async Task PrepareAsync_ReusesZipAndRestoresChangedExecutableFromArchive()
     {
-        var zip = CreateZip(("AgentLimitChecker.exe", "exe"));
+        var zip = CreateZip(("AgentLimitChecker.exe", "exe"), ("manual.html", "manual"));
         var info = Info(zip);
         var first = await PrepareAsync(new FakeDownloader(zip), info);
-        File.Delete(Path.Combine(first.StagingDirectory, "AgentLimitChecker.exe"));
+        File.WriteAllText(Path.Combine(first.StagingDirectory, "AgentLimitChecker.exe"), "tampered");
+        var downloader = new FakeDownloader(zip);
 
-        var second = await PrepareAsync(new FakeDownloader(zip), info);
+        var second = await PrepareAsync(downloader, info);
 
-        Assert.False(second.Reused);
+        Assert.True(second.Reused);
+        Assert.NotEqual(first.StagingDirectory, second.StagingDirectory);
+        Assert.Equal("exe", File.ReadAllText(Path.Combine(second.StagingDirectory, "AgentLimitChecker.exe")));
+        Assert.Equal(0, downloader.CallCount);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ReusesZipAndRestoresMissingPackageFileFromArchive()
+    {
+        var zip = CreateZip(("AgentLimitChecker.exe", "exe"), ("manual.html", "manual"));
+        var info = Info(zip);
+        var first = await PrepareAsync(new FakeDownloader(zip), info);
+        File.Delete(Path.Combine(first.StagingDirectory, "manual.html"));
+        var downloader = new FakeDownloader(zip);
+
+        var second = await PrepareAsync(downloader, info);
+
+        Assert.True(second.Reused);
+        Assert.NotEqual(first.StagingDirectory, second.StagingDirectory);
+        Assert.Equal("manual", File.ReadAllText(Path.Combine(second.StagingDirectory, "manual.html")));
+        Assert.Equal(0, downloader.CallCount);
     }
 
     private sealed class FakeDownloader(byte[] contents) : IUpdatePackageDownloader
