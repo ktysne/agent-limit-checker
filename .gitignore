@@ -2,7 +2,6 @@ node_modules/
 dist/
 tools/deploy.config.json
 *.log
-electron-run.log
 [Bb]in/
 [Oo]bj/
 TestResults/
