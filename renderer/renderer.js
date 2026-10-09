@@ -187,6 +187,7 @@ function renderService(body, svc, loginInProgress) {
     return;
   }
   const usage = svc.data || {};
+  const weeklyLabelNow = Date.now();
   let html = '';
   if (usage.plan) {
     html += `<div class="plan-label">Plan: ${escapeHtml(usage.plan)}</div>`;
@@ -195,13 +196,13 @@ function renderService(body, svc, loginInProgress) {
   // drop a window entirely — e.g. Codex temporarily removed its 5-hour limit,
   // so `fiveHour` comes back null and we hide the bucket instead of showing N/A.
   if (usage.fiveHour) html += renderBucket('5時間', usage.fiveHour);
-  if (usage.weekly) html += renderBucket('週次', usage.weekly, { compact: true });
+  if (usage.weekly) html += renderBucket(formatWeeklyLabel(usage.weekly, weeklyLabelNow), usage.weekly, { compact: true });
   // Per-model weekly caps (e.g. Fable) come through as an array; render one
   // meter each, labelled by the model name the API reports. `label` is
   // API-provided so it must be escaped before going into the bucket markup.
   if (Array.isArray(usage.weeklyScoped)) {
     for (const scoped of usage.weeklyScoped) {
-      html += renderBucket(`週次 (${escapeHtml(scoped.label)})`, scoped, { compact: true });
+      html += renderBucket(formatWeeklyLabel(scoped, weeklyLabelNow, escapeHtml(scoped.label)), scoped, { compact: true });
     }
   }
   html += renderCloudCredit(usage.cloudCredit);
