@@ -63,11 +63,14 @@ public sealed class ShellControllerTests
         var refresh = h.Controller.RefreshNowAsync();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(h.Controller.Snapshot.IsPolling);
-        await h.Controller.RefreshNowAsync();
+        var duplicate = h.Controller.RefreshNowAsync();
+        Assert.False(duplicate.IsCompleted);
         Assert.Equal(3, count);
         claude.SetException(new ClaudeProviderException("claude_rate_limited", "rate limited", retryAfter: 42));
         first.SetException(new ProviderException("codex_timeout", "timeout"));
         second.SetResult(Usage(.9));
+        await duplicate;
+        Assert.Equal(3, count);
         await refresh;
         var snapshot = h.Controller.Snapshot;
         Assert.False(snapshot.IsPolling);
@@ -178,6 +181,29 @@ public sealed class ShellControllerTests
         Assert.Equal(new[] { "fetched", "details" }, order);
         Assert.Empty(h.Controller.Snapshot.LoginInProgress.Codex);
         Assert.Single(h.Notifications);
+    }
+
+    [Fact]
+    public async Task LoginCompletedDuringRefreshFetchesAgainAfterTheStaleRefreshAndThenRequestsDetails()
+    {
+        using var h = new Harness();
+        await h.Controller.OpenLoginAsync("claude");
+        var timer = Assert.Single(h.Runtime.Timers);
+        var stale = new TaskCompletionSource<UsageSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fetches = 0;
+        h.ClaudeFetch = () => Interlocked.Increment(ref fetches) == 1 ? stale.Task : Task.FromResult(Usage(.2));
+        var order = new List<string>();
+        h.Controller.ShowDetailsRequested += () => order.Add($"details:{Volatile.Read(ref fetches)}");
+        var running = h.Controller.RefreshNowAsync();
+        h.Runtime.Signature = "changed";
+        var tick = timer.FireAsync();
+        Assert.False(tick.IsCompleted);
+        stale.SetException(new ProviderException("claude_unauthorized", "stale"));
+        await running;
+        await tick;
+        Assert.Equal(2, fetches);
+        Assert.Equal(["details:2"], order);
+        Assert.True(h.Controller.Snapshot.Claude!.Ok);
     }
 
     [Fact]

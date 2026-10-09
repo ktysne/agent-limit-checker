@@ -30,6 +30,7 @@ public sealed class ShellController : IDisposable
     private long lastAutoLoginAt;
     private bool reauthPending;
     private bool polling;
+    private Task? refreshTask;
     private bool disposed;
     private IDisposable? pollTimer;
     private string theme = "light";
@@ -61,14 +62,34 @@ public sealed class ShellController : IDisposable
         lock (gate) { if (!disposed) RestartPolling(); }
     }
 
+    // 取得中に呼ばれたら新しい取得は始めず、進行中の取得の完了を待って返る。
     public async Task RefreshNowAsync()
     {
+        Task? running = null;
+        TaskCompletionSource? done = null;
         lock (gate)
         {
-            if (disposed || polling) return;
-            polling = true;
-            Publish();
+            if (disposed) return;
+            if (polling) running = refreshTask;
+            else
+            {
+                polling = true;
+                done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                refreshTask = done.Task;
+                Publish();
+            }
         }
+        if (done is null)
+        {
+            if (running is not null) await running.ConfigureAwait(false);
+            return;
+        }
+        try { await RunRefreshAsync().ConfigureAwait(false); }
+        finally { done.SetResult(); }
+    }
+
+    private async Task RunRefreshAsync()
+    {
         try
         {
             // 探索とプロバイダの同期部分も UI スレッドから離す。
@@ -269,6 +290,10 @@ public sealed class ShellController : IDisposable
             Publish();
         }
         if (!completed) return;
+        // ログインの完了より前に始まった取得は古い資格情報で動いているので、その完了を待ってから取り直す。
+        Task? stale;
+        lock (gate) stale = polling ? refreshTask : null;
+        if (stale is not null) await stale.ConfigureAwait(false);
         await RefreshNowAsync().ConfigureAwait(false);
         lock (gate) { if (!disposed) ShowDetailsRequested?.Invoke(); }
     }
