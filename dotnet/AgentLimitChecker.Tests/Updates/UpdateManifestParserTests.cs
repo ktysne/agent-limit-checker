@@ -144,6 +144,22 @@ public class UpdateManifestParserTests
         Assert.Equal("1.2.3", result.Info!.VersionText);
     }
 
+    [Fact]
+    public void Parse_ReleaseSiteGeneratedManifest_IsAccepted()
+    {
+        var manifestPath = Environment.GetEnvironmentVariable("AGENT_LIMIT_CHECKER_TEST_MANIFEST_PATH");
+        var json = string.IsNullOrWhiteSpace(manifestPath)
+            ? Manifest("4.0.0", "https://github.com/ktysne/agent-limit-checker/releases/download/v4.0.0/AgentLimitChecker-4.0.0-win-x64.zip")
+            : File.ReadAllText(manifestPath);
+
+        var result = UpdateManifestParser.Parse(json);
+
+        Assert.Null(result.Error);
+        Assert.Equal("4.0.0", result.Info!.VersionText);
+        Assert.Equal("https://github.com/ktysne/agent-limit-checker/releases/download/v4.0.0/AgentLimitChecker-4.0.0-win-x64.zip",
+            result.Info.DownloadUrl.ToString());
+    }
+
     [Theory]
     [InlineData("https://github.com/ktysne/agent-limit-checker/releases/download/v1.2.2/AgentLimitChecker-1.2.3-win-x64.zip")]
     [InlineData("https://github.com/ktysne/agent-limit-checker/releases/download/v1.2.3/AgentLimitChecker-1.2.2-win-x64.zip")]

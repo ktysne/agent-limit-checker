@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マニュアル | Agent Limit Checker {{VERSION}}</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f7fa; --panel: #fff; --text: #18212f; --muted: #536174; --line: #d6deea; --accent: #075cb8; --button-bg: #1769c2;
+    --code-bg: #eef2f7; --note-bg: #fff8e6; --note-line: #e8c46a;
+    --safe-bg: #dff5e4; --safe-fg: #14602c; --caution-bg: #fff1cc; --caution-fg: #7a4b00;
+    --unsafe-bg: #fde0e0; --unsafe-fg: #9b1c1c; --stale-bg: #e6e8eb; --stale-fg: #4a5058;
+    --prot-bg: #e3e8ff; --prot-fg: #2e3f9e; --orphan-bg: #f2e6ff; --orphan-fg: #5b2d90;
+    --unknown-bg: #ebebeb; --unknown-fg: #555;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111821; --panel: #1c2733; --text: #edf3fa; --muted: #b2c0d0; --line: #394858; --accent: #8fc5ff; --button-bg: #1769c2;
+      --code-bg: #283646; --note-bg: #2e2a1c; --note-line: #8a7433;
+      --safe-bg: #1f4a2c; --safe-fg: #b6f0c4; --caution-bg: #5a4210; --caution-fg: #ffd98a;
+      --unsafe-bg: #5a1f1f; --unsafe-fg: #ffb3b3; --stale-bg: #3a3f47; --stale-fg: #c9ced6;
+      --prot-bg: #2b3560; --prot-fg: #c2ccff; --orphan-bg: #46305f; --orphan-fg: #dcc4ff;
+      --unknown-bg: #3a3a3a; --unknown-fg: #cfcfcf;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--text); background: var(--bg); font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif; font-size: 15px; line-height: 1.8; }
+  header { border-bottom: 1px solid var(--line); background: var(--panel); padding: 28px 24px; }
+  header .inner, main { max-width: 56rem; margin: 0 auto; }
+  header .inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; }
+  header h1 { margin: 0 0 6px; font-size: 26px; }
+  header p { margin: 0; color: var(--muted); }
+  .download { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 22px; border-radius: 8px; text-decoration: none; background: var(--button-bg); color: #fff; font-weight: 600; white-space: nowrap; }
+  .download small { font-weight: 400; font-size: 12px; }
+  .download:hover { filter: brightness(1.08); }
+  main { padding: 16px 24px 64px; }
+  article { padding: clamp(1.25rem, 5vw, 3.5rem); background: var(--panel); border: 1px solid var(--line); border-radius: 1.25rem; }
+  .page-links { margin: 0 0 12px; }
+  nav.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 20px; margin: 20px 0 32px; }
+  nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+  nav.toc li { break-inside: avoid; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 16.5px; margin: 26px 0 8px; }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 26px; }
+  li { margin: 2px 0; }
+  a { color: var(--accent); }
+  code { font-family: "Cascadia Code", Consolas, monospace; font-size: .92em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin: 0 0 14px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 16px; background: var(--panel); font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--code-bg); white-space: nowrap; }
+  .tablewrap { max-width: 100%; overflow-x: auto; }
+  .tablewrap table { min-width: 36rem; }
+  .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .safe { background: var(--safe-bg); color: var(--safe-fg); }
+  .caution { background: var(--caution-bg); color: var(--caution-fg); }
+  .unsafe { background: var(--unsafe-bg); color: var(--unsafe-fg); }
+  .stale { background: var(--stale-bg); color: var(--stale-fg); }
+  .prot { background: var(--prot-bg); color: var(--prot-fg); }
+  .orphan { background: var(--orphan-bg); color: var(--orphan-fg); }
+  .unknown { background: var(--unknown-bg); color: var(--unknown-fg); }
+  .steps li { margin: 6px 0; }
+  dl { margin: 0 0 12px; }
+  dt { font-weight: 600; margin-top: 10px; }
+  dd { margin: 2px 0 0 20px; }
+  .note { padding: .8rem 1rem; border-left: 4px solid var(--note-line); background: var(--note-bg); border-radius: .4rem; }
+  .muted { color: var(--muted); }
+  @media (max-width: 640px) {
+    header { padding: 20px 16px; }
+    header .inner { gap: 16px; }
+    main { padding: 12px 16px 48px; }
+    nav.toc ol { columns: 1; }
+    body { font-size: 14.5px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="inner">
+    <div>
+      <h1>Agent Limit Checker 利用ガイド</h1>
+      <p>Claude Code と Codex の利用量をシステムトレイに表示する Windows アプリ</p>
+    </div>
+    <a class="download" href="{{DOWNLOAD_URL}}">ダウンロード<small>{{ZIP_NAME}} ({{RELEASED_AT}})</small></a>
+  </div>
+</header>
+<main>
+<article>
+<p class="page-links"><a href="{{SITE_URL}}">トップページ</a> | <a href="license.html">ライセンス</a></p>
+
+<nav class="toc" aria-label="目次">
+  <ol>
+    <li><a href="#setup">動作環境と導入</a></li>
+    <li><a href="#popover">ポップオーバー</a></li>
+    <li><a href="#services">サービスごとの表示</a></li>
+    <li><a href="#weekly">週次枠の配分目安</a></li>
+    <li><a href="#settings">設定パネル</a></li>
+    <li><a href="#tray">トレイのメニューとログイン</a></li>
+    <li><a href="#notifications">ntfy 通知</a></li>
+    <li><a href="#updates">自動アップデート</a></li>
+    <li><a href="#migration">3.x からの移行</a></li>
+  </ol>
+</nav>
+
+<h2 id="setup">1. 動作環境と導入</h2>
+<p>Windows 10 または Windows 11 の x64 環境で動作します。.NET ランタイムはアプリに含まれるため、別途インストールする必要はありません。</p>
+<p>zip を展開し、<code>AgentLimitChecker.exe</code> を起動します。Claude Code または Codex の CLI にログイン済みであれば、利用量を取得します。アプリはシステムトレイに常駐します。</p>
+
+<h2 id="popover">2. ポップオーバー</h2>
+<p>トレイアイコンをクリックすると、利用状況をまとめたポップオーバーが開きます。サービスごとの枠、使用率、リセットまでの時間を表示します。取得中やエラーがある場合は、その状態とログインなど次の操作を確認できます。</p>
+<p>右上の歯車ボタンで設定パネルを開き、更新ボタンで利用量をすぐに取り直します。ポップオーバーの外をクリックするか <code>Esc</code> キーを押すと閉じます。</p>
+
+<h2 id="services">3. サービスごとの表示</h2>
+<h3>Claude</h3>
+<p>Claude Code の 5時間枠と週次枠の使用率、リセット時刻を表示します。利用可能な場合は、クラウドセッション用クレジットの残高と有効期限も表示します。右上の鍵ボタンからログイン用のターミナルを開けます。</p>
+<h3>Codex</h3>
+<p>検出した Codex ホームをアカウントごとに表示します。それぞれの 5時間枠と週次枠、リセット時刻を確認できます。利用可能な場合は、リセット権の残り回数と最も早い有効期限も表示します。</p>
+<p>Codex の設定にある「Codex 表示名」でアカウントごとの名前を指定できます。空にすると、ホーム名から作られた既定の表示へ戻ります。ポップオーバーとトレイの表示、通知文に同じ名前を使います。</p>
+<p>ログイン済みのアカウントがまだ検出されない場合は、既定ホームにログインするボタンが表示されます。</p>
+
+<h2 id="weekly">4. 週次枠の配分目安</h2>
+<p>週次枠の残り日数が 2 日以上のとき、現在の使用率から見た今日の目安と、残り日数で均等に使う場合の割合を表示します。表示例は「今日あと 20.0% · 4日均等なら10.0%/日」のようになります。</p>
+<p>今日の目安を超えている場合は「今日の枠 超過」と表示します。この数値は現在の使用率を日数で割り振った目安で、利用量の上限やリセット時刻を変更するものではありません。</p>
+
+<h2 id="settings">5. 設定パネル</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>設定</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>更新間隔</td><td>利用量を取得する間隔を 30 秒、1 分、2 分、5 分、10 分から選びます。</td></tr>
+    <tr><td>ログイン時に自動起動</td><td>Windows へのログイン時にアプリを起動します。</td></tr>
+    <tr><td>起動時にアップデートを確認</td><td>起動時に新しいバージョンを確認します。オフでも「アップデートを確認」ボタンから手動で確認できます。</td></tr>
+    <tr><td>アップデートを確認</td><td>確認中や結果をボタンの下に表示します。新しい版があれば更新の案内が開きます。</td></tr>
+    <tr><td>Codex 表示名</td><td>各 Codex ホームの表示名を設定します。空にすると既定名を使います。</td></tr>
+    <tr><td>ntfy 通知</td><td>通知先の Topic URL と任意の Access token、通知するイベントを設定します。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="tray">6. トレイのメニューとログイン</h2>
+<p>トレイアイコンを右クリックすると、Claude と Codex 各アカウントの 5時間使用率が表示されます。続けて「詳細を表示」「今すぐ更新」、ログイン、自動起動、更新間隔、「終了」を選べます。</p>
+<p>「claude login (新しいターミナルで実行)」または Codex のログイン項目を選ぶと、新しいターミナルで CLI のログインを開始します。Codex の各ホームは個別に選べます。見つからない既定ホームは、作成してログインする項目として表示されます。</p>
+<p>設定パネルとトレイの「ログイン時に自動起動」は同じ設定です。更新間隔も設定パネルまたはトレイの「更新間隔」から変更できます。</p>
+
+<h2 id="notifications">7. ntfy 通知</h2>
+<p>スマートフォンなどで ntfy の Topic を購読し、その Topic URL を設定します。認証が必要なサーバーでは Access token を追加します。通知の種類は次から選びます。</p>
+<ul>
+  <li>5時間リセット</li>
+  <li>週次リセット</li>
+  <li>Codex リセット権の期限</li>
+</ul>
+<p>リセット権の期限は、最も早い期限の 5 時間前に通知します。期限まで 5 時間を切っている場合は、有効期限内ならすぐに通知します。設定を変更すると通知の登録も更新されます。</p>
+
+<h2 id="updates">8. 自動アップデート</h2>
+<p>「起動時にアップデートを確認」が有効な場合、起動時に最新版を確認します。設定パネルの「アップデートを確認」からも調べられます。新しい版が見つかると、トレイのメニューと更新の案内に表示します。</p>
+<p>自動適用できる環境では、案内から更新を始めると zip のダウンロード、SHA-256 の照合、ファイルの展開、アプリの再起動を行います。更新中は進行状況を表示し、途中で失敗した場合は元のファイルへ戻します。</p>
+<p>アプリのフォルダーへ書き込めない場合など、自動適用できない環境ではブラウザーで配布 zip を開きます。zip を展開して更新してください。</p>
+
+<h2 id="migration">9. 3.x からの移行</h2>
+<p>3.x（Electron 版）には自動アップデートがありません。4.0.0 を一度ダウンロードし、展開したフォルダーへ入れ直してください。設定とログはそのまま引き継がれます。</p>
+<p class="note">更新後に以前のファイルが残っている場合は、古い実行ファイルを起動しないよう、展開先を空にしてから新しい zip を展開してください。</p>
+
+</article>
+</main>
+</body>
+</html>
+</html>
