@@ -139,7 +139,7 @@ public sealed class TrayPresentationTests
         Assert.Equal((244, 67, 54), TrayBitmap.ColorForUtilization(.85, false));
     }
 
-    // 期待値の再生成は node dotnet/AgentLimitChecker.Tests/Fixtures/tray-reference.cjs。
+    // 3.x(Electron 版)の描画と画素が一致することを固定した値。描画を意図して変えるときは C# の出力から作り直す。
     [Theory]
     [InlineData(null, null, false, "1525057CE021A88AA218EBB306F0A7704E415D8C3428E3030A79662FF4AFCE70")]
     [InlineData(.45, .9, false, "D6FDCFB6F02BE51ED101E5F727C374A0159EC983C6CDA27F0219D1F2C7ED92D9")]
