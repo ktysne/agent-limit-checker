@@ -13,12 +13,12 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 
 ## 現在地と次にやること
 
-- P1〜P11 の PR(#50〜#60)をすべて作り、どれもクロスレビューが収束している(2026-10-10)。どこまでマージされたかは表の「状態」の列と GitHub を見る。
+- P1〜P11 の PR(#50〜#60)はすべて統合ブランチ `feature/csharp-wpf` にマージ済みで、開発者の実機での確認も済んでいる(2026-10-11)。
+- 統合ブランチを main へ入れる PR を作った。状態は GitHub を見る。
 - 次は開発者が行う。
-  1. #50 から #60 まで、下から順に merge commit でマージする。下の段のマージの後、次の段の base が `feature/csharp-wpf` に変わったのを確かめてからマージする。
-  2. 統合ブランチから `build-release.bat` で発行した exe で、「実機での確認」を行う。
-  3. 統合ブランチを main へ入れる PR を作ってマージし、`build-package.bat` で 4.0.0 を発行する。
-- 次のセッションは、実機での確認で見つかった不具合を、統合ブランチから切ったブランチで直す。
+  1. 統合ブランチから main への PR を merge commit でマージする。
+  2. main で `build-package.bat` を実行し、4.0.0 を発行する。
+- 発行の後に見つかった不具合は、main から切ったブランチで直す。
 
 ## 決定済みの判断
 
@@ -102,17 +102,17 @@ P0 だけは文書のみの変更なので main へ向ける。
 | 順 | 対象 | 主な変更先 | 区分 | ブランチ | base | PR | 状態 |
 |---|---|---|---|---|---|---|---|
 | P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | マージ済み(2026-10-10 確認) |
-| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | [#50](https://github.com/ktysne/agent-limit-checker/pull/50) | レビュー収束、マージ待ち(2026-10-10) |
-| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | [#51](https://github.com/ktysne/agent-limit-checker/pull/51) | レビュー収束、マージ待ち(2026-10-10) |
-| P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | [#52](https://github.com/ktysne/agent-limit-checker/pull/52) | レビュー収束、マージ待ち(2026-10-10) |
-| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | [#53](https://github.com/ktysne/agent-limit-checker/pull/53) | レビュー収束、マージ待ち(2026-10-10) |
-| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | [#54](https://github.com/ktysne/agent-limit-checker/pull/54) | レビュー収束、マージ待ち(2026-10-10) |
-| P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | [#55](https://github.com/ktysne/agent-limit-checker/pull/55) | レビュー収束、マージ待ち(2026-10-10) |
-| P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | [#56](https://github.com/ktysne/agent-limit-checker/pull/56) | レビュー収束、マージ待ち(2026-10-10) |
-| P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | [#57](https://github.com/ktysne/agent-limit-checker/pull/57) | レビュー収束、マージ待ち(2026-10-10) |
-| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | [#58](https://github.com/ktysne/agent-limit-checker/pull/58) | レビュー収束、マージ待ち(2026-10-10) |
-| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | [#59](https://github.com/ktysne/agent-limit-checker/pull/59) | レビュー収束、マージ待ち(2026-10-10) |
-| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | [#60](https://github.com/ktysne/agent-limit-checker/pull/60) | レビュー収束、マージ待ち(2026-10-10) |
+| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | [#50](https://github.com/ktysne/agent-limit-checker/pull/50) | マージ済み(2026-10-11 確認) |
+| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | [#51](https://github.com/ktysne/agent-limit-checker/pull/51) | マージ済み(2026-10-11 確認) |
+| P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | [#52](https://github.com/ktysne/agent-limit-checker/pull/52) | マージ済み(2026-10-11 確認) |
+| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | [#53](https://github.com/ktysne/agent-limit-checker/pull/53) | マージ済み(2026-10-11 確認) |
+| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | [#54](https://github.com/ktysne/agent-limit-checker/pull/54) | マージ済み(2026-10-11 確認) |
+| P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | [#55](https://github.com/ktysne/agent-limit-checker/pull/55) | マージ済み(2026-10-11 確認) |
+| P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | [#56](https://github.com/ktysne/agent-limit-checker/pull/56) | マージ済み(2026-10-11 確認) |
+| P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | [#57](https://github.com/ktysne/agent-limit-checker/pull/57) | マージ済み(2026-10-11 確認) |
+| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | [#58](https://github.com/ktysne/agent-limit-checker/pull/58) | マージ済み(2026-10-11 確認) |
+| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | [#59](https://github.com/ktysne/agent-limit-checker/pull/59) | マージ済み(2026-10-11 確認) |
+| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | [#60](https://github.com/ktysne/agent-limit-checker/pull/60) | マージ済み(2026-10-11 確認) |
 | 統合 | 実機での安定の確認後、統合ブランチを main へ | — | — | `feature/csharp-wpf` | main | 未作成 | 未着手 |
 | 発行 | `build-package.bat` で 4.0.0 を発行し、配布ページと `update-v2.json` を公開する | — | 開発者 | main | — | — | 未着手 |
 
@@ -186,6 +186,6 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 ```text
 docs/handover/2026-10-10-csharp-wpf-migration.md を読み、C# + WPF への移行の続きを進めてください。
-まず「現在地と次にやること」と表の「状態」の列を、gh で PR #50〜#60 の状態と照合してください。
-開発者から実機での確認の結果を受け取ったら、不具合ごとに統合ブランチ feature/csharp-wpf から fix/ のブランチを切って直し、統合ブランチへの PR を作ってください。
+まず「現在地と次にやること」を、gh で統合ブランチ feature/csharp-wpf から main への PR の状態と照合してください。
+main へのマージと 4.0.0 の発行が済んでいたら、資料の冒頭に完了した日付を足し、メモリーの計画への参照を消してください。
 ```
