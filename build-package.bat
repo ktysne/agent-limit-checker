@@ -58,7 +58,7 @@ set "LASTTAG="
 for /f "delims=" %%T in ('git tag --list v* --sort^=v:refname 2^>nul') do set "LASTTAG=%%T"
 if not defined LASTTAG set "LASTTAG=none"
 set "PROJECTVER="
-for /f "tokens=2 delims=<>" %%V in ('findstr /c:"<Version " "dotnet\AgentLimitChecker.App\AgentLimitChecker.App.csproj') do set "PROJECTVER=%%V"
+for /f "tokens=3 delims=<>" %%V in ('findstr /c:"<Version " "dotnet\AgentLimitChecker.App\AgentLimitChecker.App.csproj"') do set "PROJECTVER=%%V"
 echo.
 echo [agent-limit-checker] Published version: %PUBLISHED%
 echo [agent-limit-checker] Latest local tag:  %LASTTAG%
