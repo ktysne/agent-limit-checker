@@ -15,13 +15,49 @@ public interface IDetailsPresenter
 public interface IAutoLaunchService
 {
     bool IsEnabled { get; }
-    void SetEnabled(bool enabled);
+    /// <summary>失敗したときは false を返し、状態は変えない。</summary>
+    bool SetEnabled(bool enabled);
 }
 
-public sealed class SettingsAutoLaunchService(SettingsStore store) : IAutoLaunchService
+public sealed class RegistryAutoLaunchService(
+    IAutoLaunchRegistry registry,
+    string executablePath,
+    string valueName = AutoLaunchPolicy.DefaultValueName,
+    Action<string>? logError = null) : IAutoLaunchService
 {
-    public bool IsEnabled => store.Load().AutoLaunch;
-    public void SetEnabled(bool enabled) => store.Save(new JsonObject { ["autoLaunch"] = enabled });
+    // レジストリの失敗で起動や設定の操作を止めない。読めなければ無効として扱う。
+    public bool IsEnabled
+    {
+        get
+        {
+            try { return AutoLaunchPolicy.IsEnabled(registry.GetRunValue(valueName), registry.GetStartupApprovedValue(valueName)); }
+            catch (Exception) { logError?.Invoke("[autoLaunch] isEnabled failed"); return false; }
+        }
+    }
+
+    // 利用者が有効にしたときは、タスク マネージャーで無効にした印も消す。Electron の setLoginItemSettings と同じ扱いである。
+    // 印を先に消すのは、そこで失敗したときに Run 値を書き換えずに済ませるためである。
+    public bool SetEnabled(bool enabled)
+    {
+        try
+        {
+            if (enabled)
+            {
+                registry.DeleteStartupApprovedValue(valueName);
+                registry.SetRunValue(valueName, AutoLaunchPolicy.BuildValue(executablePath));
+            }
+            else registry.DeleteRunValue(valueName);
+            return true;
+        }
+        catch (Exception) { logError?.Invoke("[autoLaunch] setEnabled failed"); return false; }
+    }
+
+    // 起動時の登録し直しは exe のパスだけを替え、タスク マネージャーでの無効化は残す。
+    public void RegisterCurrentExecutable()
+    {
+        try { registry.SetRunValue(valueName, AutoLaunchPolicy.BuildValue(executablePath)); }
+        catch (Exception) { logError?.Invoke("[autoLaunch] re-registration failed"); }
+    }
 }
 
 public interface ILoginLauncher

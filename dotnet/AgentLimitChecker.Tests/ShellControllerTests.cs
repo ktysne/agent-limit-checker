@@ -12,6 +12,18 @@ public sealed class ShellControllerTests
 {
     private static UsageSnapshot Usage(double utilization = .5) => new(new(utilization, 2000000), null, [], null, null, "Pro");
 
+    internal sealed class FakeAutoLaunchService : IAutoLaunchService
+    {
+        public bool IsEnabled { get; private set; }
+        public bool Fails { get; set; }
+        public bool SetEnabled(bool enabled)
+        {
+            if (Fails) return false;
+            IsEnabled = enabled;
+            return true;
+        }
+    }
+
     [Fact]
     public void InitialSnapshotExposesDefaultHomeSettingsVersionThemeAndEmptyLoginProgress()
     {
@@ -147,6 +159,19 @@ public sealed class ShellControllerTests
         Assert.True(h.Controller.Snapshot.AutoLaunchEnabled);
         Assert.True(h.Settings.Load().AutoLaunch);
         Assert.Equal(2, h.Notifications.Count);
+    }
+
+    [Fact]
+    public void SetAutoLaunchKeepsTheSavedSettingWhenTheRegistryWriteFails()
+    {
+        using var h = new Harness();
+        h.Controller.SetAutoLaunch(true);
+        h.AutoLaunch.Fails = true;
+
+        h.Controller.SetAutoLaunch(false);
+
+        Assert.True(h.Settings.Load().AutoLaunch);
+        Assert.True(h.Controller.Snapshot.AutoLaunchEnabled);
     }
 
     [Fact]
@@ -389,6 +414,7 @@ public sealed class ShellControllerTests
     {
         private readonly ProviderTestDirectory directory = new();
         public SettingsStore Settings { get; }
+        public FakeAutoLaunchService AutoLaunch { get; } = new();
         public FakeRuntime Runtime { get; } = new();
         public FakeLauncher Launcher { get; } = new();
         public ShellController Controller { get; }
@@ -412,7 +438,7 @@ public sealed class ShellControllerTests
                 FetchClaude = () => ClaudeFetch(), FetchCodex = home => CodexFetch(home), DiscoverHomes = () => Homes,
                 DefaultAccount = () => Default, ClaudeCredentialsFile = "C:/test/claude/.credentials.json",
                 ShutdownCodex = home => StoppedHomes.Add(home), ShutdownClaude = () => ClaudeShutdowns++
-            }, Runtime, Launcher, new SettingsAutoLaunchService(Settings), snapshot => Notifications.Add(snapshot),
+            }, Runtime, Launcher, AutoLaunch, snapshot => Notifications.Add(snapshot),
                 () => NotificationDisposals++, "4.0.0", Logs.Add);
         }
 
