@@ -13,8 +13,12 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 
 ## 現在地と次にやること
 
-- 統合ブランチ `feature/csharp-wpf` を作成済みで、各段の PR を「対応順序、ブランチ、PR」の表のとおりスタック式に積んでいる。どこまで進んだかは表の「状態」の列を見る。
-- 次のセッションは、表で「未着手」の最初の段から着手する。その段のブランチは、1 段下のブランチの先頭から切る。
+- P1〜P11 の PR(#50〜#60)をすべて作り、どれもクロスレビューが収束している(2026-10-10)。どこまでマージされたかは表の「状態」の列と GitHub を見る。
+- 次は開発者が行う。
+  1. #50 から #60 まで、下から順に merge commit でマージする。下の段のマージの後、次の段の base が `feature/csharp-wpf` に変わったのを確かめてからマージする。
+  2. 統合ブランチから `build-release.bat` で発行した exe で、「実機での確認」を行う。
+  3. 統合ブランチを main へ入れる PR を作ってマージし、`build-package.bat` で 4.0.0 を発行する。
+- 次のセッションは、実機での確認で見つかった不具合を、統合ブランチから切ったブランチで直す。
 
 ## 決定済みの判断
 
@@ -108,7 +112,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 | P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | [#57](https://github.com/ktysne/agent-limit-checker/pull/57) | レビュー収束、マージ待ち(2026-10-10) |
 | P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | [#58](https://github.com/ktysne/agent-limit-checker/pull/58) | レビュー収束、マージ待ち(2026-10-10) |
 | P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | [#59](https://github.com/ktysne/agent-limit-checker/pull/59) | レビュー収束、マージ待ち(2026-10-10) |
-| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | 作成中 | 実装中 |
+| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | [#60](https://github.com/ktysne/agent-limit-checker/pull/60) | レビュー収束、マージ待ち(2026-10-10) |
 | 統合 | 実機での安定の確認後、統合ブランチを main へ | — | — | `feature/csharp-wpf` | main | 未作成 | 未着手 |
 | 発行 | `build-package.bat` で 4.0.0 を発行し、配布ページと `update-v2.json` を公開する | — | 開発者 | main | — | — | 未着手 |
 
@@ -154,18 +158,16 @@ P0 だけは文書のみの変更なので main へ向ける。
 5. ntfy への通知が、リセットの時刻とクレジットの期限で届く。
 6. 自動起動でログオン時に起動し、`--hidden` でポップオーバーを出さずに常駐する。
 7. 数日間の常駐で、メモリーの増加と `codex` の子プロセスの残りが無い。
-8. 開発用の manifest で、更新の通知、今すぐ更新、後で、このバージョンをスキップの 3 つが動く。更新の後も自動起動が働く。
+8. 開発用の manifest(`AGENT_LIMIT_CHECKER_UPDATE_MANIFEST_URL`)で、バルーン通知、トレイのメニューの「アップデートがあります」、更新の画面の「更新する」と「配布ページを開く」が動く。更新の後も自動起動が働く。手順は PR #57 の「確認して欲しいポイント」にある。「この版をスキップ」は置いていない(P8 で仮に決めた点)。
 
 ## 落とし穴
 
 - Electron 版と C# 版は単一インスタンスの仕組みが別なので、同時に起動できてしまう。両方が同じ `settings.json` を書き、同じ CLI の資格情報を更新するので、実機で試すときは Electron 版を終了しておく。
-- Electron 版がトレイで動いている間は `npm start` がすぐ終わる(CLAUDE.md「アプリ稼働中の編集」)。見比べるときは portable exe を終了してから起動する。
-- Electron 版が登録した Run キーの値の名前と、`getLoginItemSettings` が見る形式は未確認である。P7 の前に `test/login-item-probe.js` で実際の値を確かめる。
-- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。npm の `.ps1` の shim は標準入力を `$input |` で渡すので、`powershell -File` 経由では入力が終わるまで node へ届かず、`initialize` がタイムアウトする。C# 版は、shim と同じ規則で `node` と `node_modules/@openai/codex/bin/codex.js` を直接起動して避ける。Electron 版にはこの対策が無い。
+- Release 構成の exe は、設定で自動起動が有効なら、起動時に Run キー `com.agent-limit-checker.app` を自分の exe で登録し直す。開発者の環境で試した後は、使っている exe を起動し直して戻す。Debug 構成は登録し直さない。
+- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。npm の `.ps1` の shim は標準入力を `$input |` で渡すので、`powershell -File` 経由では入力が終わるまで node へ届かず、`initialize` がタイムアウトする。C# 版は、shim と同じ規則で `node` と `node_modules/@openai/codex/bin/codex.js` を直接起動して避ける(3.x の Electron 版にはこの対策が無い)。
 - 自動アップデートは、%TEMP% からの起動と書き込めない場所(Program Files など)では自動で適用できない。agent-gc と同じく、その場合はブラウザで zip を開く動きにする。
-- 発行の手順の違いに注意する。screen-recorder はタグを先に push し、Release をソースのリポジトリに作る。agent-gc は送信の後にタグを push する。この計画では agent-gc の順に合わせる。
-- `build-package.bat` は Node 22.15 以上と `basic-ftp` を前提にする。`package.json` の `devDependencies` に `basic-ftp` を足す。
-- ai-cross-review の観点ファイル `.cross-review.md` は Electron 前提で書かれている。P1 のレビューから C# の観点(資格情報をログに出さない、子プロセスの後始末、UI スレッドを止めない)を足しておく。正式な書き換えは P11 で行う。
+- 発行の順は agent-gc と逆で、ビルドしたコミットにタグを付けて push してから `gh release create --verify-tag` で Release を作る。Release をソースのリポジトリに作るので、タグが無いまま gh に作らせると既定のブランチの先頭に付き、ビルドしたコミットとずれるためである。タグの push の後で `gh` が使えないとタグだけが公開されるので、発行の前に `gh auth status` を確かめる。
+- `build-package.bat` は Node 22.15 以上、`basic-ftp`(`npm install`)、`gh` を前提にする。
 - Windows の Bash ツールでは、続けて書いた `\` が半分になる(anthropics/claude-code#98622)。パスを含むスクリプトは、ファイルに書いてから実行する。
 
 ## 参照する手本
@@ -183,8 +185,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 ## 次のセッションの開始用プロンプト
 
 ```text
-docs/handover/2026-10-10-csharp-wpf-migration.md を読み、C# + WPF への移行を進めてください。
-統合ブランチ feature/csharp-wpf を最新の origin/main から作って push し、P1 から順に、計画の区分で実装を委譲してください。
-各段の PR は計画の表のとおりスタック式で積み、段ごとにクロスレビューの三択を提示してください。
-進んだら、計画の表の「PR」と「状態」の列を更新してください。
+docs/handover/2026-10-10-csharp-wpf-migration.md を読み、C# + WPF への移行の続きを進めてください。
+まず「現在地と次にやること」と表の「状態」の列を、gh で PR #50〜#60 の状態と照合してください。
+開発者から実機での確認の結果を受け取ったら、不具合ごとに統合ブランチ feature/csharp-wpf から fix/ のブランチを切って直し、統合ブランチへの PR を作ってください。
 ```
