@@ -1,8 +1,6 @@
 {
   "name": "agent-limit-checker",
-  "version": "3.7.0",
-  "description": "Windows tray app that shows Claude Code and Codex API rate-limit usage (Windows port of otoha1119/token-checker)",
-  "main": "main.js",
+  "description": "Windows tray app that shows Claude Code and Codex rate-limit usage. The app itself is in dotnet/; this package holds the release and review tooling.",
   "author": "agent-limit-checker contributors",
   "license": "UNLICENSED",
   "private": true,
@@ -10,11 +8,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --enable-logging",
-    "generate-icon": "node scripts/generate-icon.js",
-    "test": "node --test \"test/*.test.js\"",
-    "test:tools": "node --test tests/tools/*.test.js",
+    "test": "node --test tests/tools/*.test.js",
     "release:generate": "node tools/release-site.js generate",
     "release:check-version": "node --use-system-ca tools/release-site.js check-version",
     "release:upload": "node --use-system-ca tools/release-site.js upload",
@@ -23,30 +17,9 @@
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",
     "sync": "node tools/cross-review.sync.js",
-    "sync:check": "node tools/cross-review.sync.js --check",
-    "build": "electron-builder --win --x64",
-    "release:major": "npm version major -m \"chore: release v%s\"",
-    "release:minor": "npm version minor -m \"chore: release v%s\""
+    "sync:check": "node tools/cross-review.sync.js --check"
   },
   "devDependencies": {
-    "basic-ftp": "^5.3.1",
-    "electron": "^42.2.0",
-    "electron-builder": "^26.8.1"
-  },
-  "build": {
-    "appId": "com.agent-limit-checker.app",
-    "productName": "AgentLimitChecker",
-    "files": [
-      "main.js",
-      "preload.js",
-      "src/**/*",
-      "renderer/**/*",
-      "assets/**/*"
-    ],
-    "win": {
-      "target": "portable",
-      "icon": "assets/app-icon.ico",
-      "signAndEditExecutable": false
-    }
+    "basic-ftp": "^5.3.1"
   }
 }

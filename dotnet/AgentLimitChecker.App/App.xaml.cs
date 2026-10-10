@@ -44,7 +44,7 @@ public partial class App : System.Windows.Application
         ApplyVisualDefaults();
     }
 
-    // Electron 版のポップオーバー(renderer/style.css)と同じフォントにする。
+    // 3.x(Electron 版)のポップオーバーと同じフォントにする。
     // 言語を指定しないと、WPF は日本語の文字に意図しない代替のフォントを使うことがある。
     // メタデータの上書きは、最初のウィンドウを作る前に 1 回だけ行う必要がある。
     private static void ApplyVisualDefaults()
