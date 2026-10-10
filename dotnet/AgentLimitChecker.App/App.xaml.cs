@@ -108,9 +108,9 @@ public partial class App : System.Windows.Application
         var claude = new ClaudeProvider();
         var codex = new CodexProvider();
         var notifier = new NtfyResetNotifier(settings.Load, logger: _logger);
-        _details = new LoggingDetailsPresenter(_logger);
         _shell = new ShellController(settings, ShellProviders.Create(claude, codex), new ShellRuntime(_logger.Error),
             new LoginLauncher(_logger), new SettingsAutoLaunchService(settings), notifier.Update, notifier.Dispose, GetVersion(), _logger.Info);
+        _details = new PopoverDetailsPresenter(_shell, () => _notifyIcon, Shutdown);
         _shell.SnapshotChanged += snapshot => Dispatcher.BeginInvoke(() => UpdateTray(snapshot));
         _shell.ShowDetailsRequested += () => Dispatcher.BeginInvoke(() => RequestDetails(show: true));
         ShowTrayIcon();
@@ -126,6 +126,7 @@ public partial class App : System.Windows.Application
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _activationWait?.Unregister(null);
+        (_details as IDisposable)?.Dispose();
         _shell?.Dispose();
         if (_notifyIcon is not null) _notifyIcon.Visible = false;
         _notifyIcon?.Dispose();
@@ -229,7 +230,7 @@ public partial class App : System.Windows.Application
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
-        Dispatcher.BeginInvoke(() => { _lastTraySnapshot = null; if (_shell is not null) UpdateTray(_shell.Snapshot); });
+        Dispatcher.BeginInvoke(() => { _lastTraySnapshot = null; if (_shell is not null) UpdateTray(_shell.Snapshot); (_details as PopoverDetailsPresenter)?.Reposition(); });
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e) =>
         Dispatcher.BeginInvoke(() => { if (_exiting) return; _lastTraySnapshot = null; UpdateTheme(); if (_shell is not null) UpdateTray(_shell.Snapshot); });
