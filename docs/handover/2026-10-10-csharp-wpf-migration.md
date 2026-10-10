@@ -106,8 +106,8 @@ P0 だけは文書のみの変更なので main へ向ける。
 | P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | [#55](https://github.com/ktysne/agent-limit-checker/pull/55) | レビュー収束、マージ待ち(2026-10-10) |
 | P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | [#56](https://github.com/ktysne/agent-limit-checker/pull/56) | レビュー収束、マージ待ち(2026-10-10) |
 | P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | [#57](https://github.com/ktysne/agent-limit-checker/pull/57) | レビュー収束、マージ待ち(2026-10-10) |
-| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | 作成中 | 実装中 |
-| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | 未作成 | 未着手 |
+| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | [#58](https://github.com/ktysne/agent-limit-checker/pull/58) | レビュー収束、マージ待ち(2026-10-10) |
+| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | 作成中 | 実装中 |
 | P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | 未作成 | 未着手 |
 | 統合 | 実機での安定の確認後、統合ブランチを main へ | — | — | `feature/csharp-wpf` | main | 未作成 | 未着手 |
 | 発行 | `build-package.bat` で 4.0.0 を発行し、配布ページと `update-v2.json` を公開する | — | 開発者 | main | — | — | 未着手 |

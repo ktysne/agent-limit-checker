@@ -3,6 +3,8 @@ using AgentLimitChecker.Core.Updates;
 namespace AgentLimitChecker.Tests.Updates;
 public class UpdateManifestParserTests
 {
+    private const string DefaultReleaseSiteVersion = "4.0.0";
+
     private static string Manifest(string version, string url, int schema = 2) =>
         $$"""
         {
@@ -15,6 +17,13 @@ public class UpdateManifestParserTests
           }
         }
         """;
+
+    private static (string Version, string Url) ExpectedReleaseSiteManifest(string? version)
+    {
+        var expectedVersion = string.IsNullOrWhiteSpace(version) ? DefaultReleaseSiteVersion : version;
+        var url = $"https://github.com/ktysne/agent-limit-checker/releases/download/v{expectedVersion}/AgentLimitChecker-{expectedVersion}-win-x64.zip";
+        return (expectedVersion, url);
+    }
 
     [Fact]
     public void Parse_ValidManifest_ReturnsUpdateInfo()
@@ -142,6 +151,35 @@ public class UpdateManifestParserTests
 
         Assert.Null(result.Error);
         Assert.Equal("1.2.3", result.Info!.VersionText);
+    }
+
+    [Fact]
+    public void Parse_ReleaseSiteGeneratedManifest_IsAccepted()
+    {
+        var manifestPath = Environment.GetEnvironmentVariable("AGENT_LIMIT_CHECKER_TEST_MANIFEST_PATH");
+        var expected = ExpectedReleaseSiteManifest(
+            Environment.GetEnvironmentVariable("AGENT_LIMIT_CHECKER_TEST_MANIFEST_VERSION"));
+        var json = string.IsNullOrWhiteSpace(manifestPath)
+            ? Manifest(expected.Version, expected.Url)
+            : File.ReadAllText(manifestPath);
+
+        var result = UpdateManifestParser.Parse(json);
+
+        Assert.Null(result.Error);
+        Assert.Equal(expected.Version, result.Info!.VersionText);
+        Assert.Equal(expected.Url, result.Info.DownloadUrl.ToString());
+    }
+
+    [Fact]
+    public void Parse_ReleaseSiteGeneratedManifest_UsesConfiguredVersion()
+    {
+        var expected = ExpectedReleaseSiteManifest("4.1.0");
+        var result = UpdateManifestParser.Parse(Manifest(expected.Version, expected.Url));
+
+        Assert.Null(result.Error);
+        Assert.Equal("4.1.0", result.Info!.VersionText);
+        Assert.Equal("https://github.com/ktysne/agent-limit-checker/releases/download/v4.1.0/AgentLimitChecker-4.1.0-win-x64.zip",
+            result.Info.DownloadUrl.ToString());
     }
 
     [Theory]

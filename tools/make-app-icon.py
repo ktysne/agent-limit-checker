@@ -9,6 +9,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "icon.png"
 OUTPUT = ROOT / "dotnet" / "AgentLimitChecker.App" / "app.ico"
+SITE_OUTPUT = ROOT / "site" / "assets" / "app-icon-256.png"
 # 20、24、40 は表示倍率 125%、150%、250% のトレイと小さいアイコンの大きさ。
 SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
 
@@ -18,6 +19,8 @@ def main() -> None:
     # 各サイズを元の大きさから直接縮小する。Pillow に任せると最大の 1 枚から段階的に縮めて細い線がぼやける。
     frames = [master.resize((size, size), Image.LANCZOS) for size in SIZES]
     frames[-1].save(OUTPUT, format="ICO", sizes=[(size, size) for size in SIZES], append_images=frames[:-1])
+    SITE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    master.resize((256, 256), Image.LANCZOS).save(SITE_OUTPUT, format="PNG")
 
 
 if __name__ == "__main__":
