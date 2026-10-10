@@ -8,13 +8,17 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 アプリの機能の追加と見た目の刷新は対象から外し、今の機能と挙動をそのまま移す。
 移行と改善を同じ差分に混ぜると、回帰の原因を切り分けられないためである。
 次の 2 つも対象から外す。
-- アプリアイコンの作成:開発者が行う。
+- アプリアイコンの作成:開発者が行う(2026-10-10 に `assets/icon.png` と `assets/icon-transparent.png` を配置済み)。
 - ktysne.info のトップページで、上部のエフェクターの UI から個別ページへリンクすること:4.0.0 の発行の後に対応する。[ktysne/ktysne-top#20](https://github.com/ktysne/ktysne-top/issues/20) で追う。
 
 ## 現在地と次にやること
 
-- この計画の資料だけができている。C# のコードはまだ無い。
-- 次のセッションは、統合ブランチ `feature/csharp-wpf` を最新の `origin/main` から作って push し、P1 から着手する。
+- P1〜P11 の PR(#50〜#60)はすべて統合ブランチ `feature/csharp-wpf` にマージ済みで、開発者の実機での確認も済んでいる(2026-10-11)。
+- 統合ブランチを main へ入れる PR を作った。状態は GitHub を見る。
+- 次は開発者が行う。
+  1. 統合ブランチから main への PR を merge commit でマージする。
+  2. main で `build-package.bat` を実行し、4.0.0 を発行する。
+- 発行の後に見つかった不具合は、main から切ったブランチで直す。
 
 ## 決定済みの判断
 
@@ -51,6 +55,27 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 - 非同期処理は `async`/`await` で書き、UI への反映は `Dispatcher` を経る。取得の処理は UI スレッドを止めない。
 - exe の名前は `AgentLimitChecker.exe`、zip の名前は `AgentLimitChecker-X.Y.Z-win-x64.zip` にする。zip の中身は agent-gc と同じく exe、`manual.html`、`license.html` の 3 つにする。
 
+### 表示倍率とフォントの要件
+
+開発者は 4K のディスプレイを 150% の表示倍率で使っている(作業領域は約 2560×1400 の論理ピクセル)。
+表示倍率の不具合とフォントの見た目は、移行で崩れやすいので、各段で次を守る(2026-10-10 開発者の指定)。
+
+- DPI の扱い
+  - `app.manifest` で Per-Monitor V2 を宣言する(`dpiAwareness` に `PerMonitorV2`)。WinForms の部品(`NotifyIcon` とそのメニュー)も同じプロセスなので、この宣言に従う。
+  - Win32 の API(`Shell_NotifyIconGetRect`、`GetMonitorInfo`)は物理ピクセルを返し、WPF の `Left`、`Top`、`Width`、`Height` は論理単位(1/96 インチ)である。位置は、表示先のモニターの DPI で換算する。モニターごとの DPI は `GetDpiForMonitor` で得る。換算を混ぜると、150% でポップオーバーの位置と大きさが 1.5 倍ずれる。
+  - 倍率の違うモニターへ移ったときは `DpiChanged` を受けて、位置と大きさを決め直す。
+  - 細い線と枠がぼけないよう、ルートで `UseLayoutRounding="True"` を有効にする。
+  - トレイのアイコンは、`SystemInformation.SmallIconSize`(150% では 24px)の大きさの画像を渡す。16px の画像を拡大させると、ぼける。P5 で数値を描くアイコンも、この大きさで描く。
+  - トレイのメニューの文字の大きさと位置が、150% で正しいかを実機で確かめる。崩れるなら、WPF の `ContextMenu` に替える。
+- フォント
+  - 目標は Electron 版と同じ見た目である。今のポップオーバーは `font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif` で、基準の大きさは 13px である(`renderer/style.css`)。
+  - WPF の既定のフォントは、日本語の文字に意図しない代替のフォントを使うことがある。ルートの `FontFamily` に `Segoe UI, Yu Gothic UI, Meiryo` を明示し、`Language` を `ja-JP` にする。
+  - CSS の px と WPF の論理単位は同じ大きさ(1/96 インチ)なので、`style.css` の `font-size` と `font-weight` の値をそのまま使う。
+  - `AllowsTransparency="True"` は使わない。文字のアンチエイリアスが ClearType からグレースケールに落ち、にじんで見えるためである。Electron 版のポップオーバーも透過していない(`main.js` の `transparent: false`)。
+  - `TextOptions.TextFormattingMode` と `TextRenderingMode` は、150% で Electron 版のスクリーンショットと並べて比べ、近いほうに決める。
+- 確かめ方
+  - P1、P5、P6 では、150% のモニターで、発行した exe の画面のスクリーンショットを撮る。P6 では Electron 版の同じ状態のスクリーンショットと並べ、文字の形、大きさ、太さ、にじみ、余白を比べる。比べた画像は PR に貼る。
+
 ### Electron 版との対応
 
 | Electron 版 | C# 版での置き換え |
@@ -65,7 +90,7 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 | `node:https` | `HttpClient` |
 | `child_process.spawn` | `Process`。`codex app-server` は標準入出力をリダイレクトし、Job Object で終了時に子プロセスを道連れにする |
 | `nativeImage`(トレイアイコンの生成) | `WriteableBitmap` か GDI+ で描き、`Icon` に変換する |
-| `app.getPath('logs')` | `%APPDATA%\agent-limit-checker\logs`(Electron 版と同じ場所かは未確認。P1 で確かめる) |
+| `app.getPath('logs')` | `%APPDATA%\agent-limit-checker\logs`の `agent-limit-checker.log`。Electron 版と同じファイルで、P1 で追記されることを確かめた |
 | `node --test` | `dotnet test`(xUnit) |
 | `electron-builder` の portable exe | `dotnet publish` の単一 exe を `build-package.bat` で zip にする |
 
@@ -76,18 +101,18 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 | 順 | 対象 | 主な変更先 | 区分 | ブランチ | base | PR | 状態 |
 |---|---|---|---|---|---|---|---|
-| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | レビュー待ち(2026-10-10) |
-| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | 未作成 | 未着手 |
-| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | 未作成 | 未着手 |
-| P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | 未作成 | 未着手 |
-| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | 未作成 | 未着手 |
-| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | 未作成 | 未着手 |
-| P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | 未作成 | 未着手 |
-| P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | 未作成 | 未着手 |
-| P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | 未作成 | 未着手 |
-| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | 未作成 | 未着手 |
-| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | 未作成 | 未着手 |
-| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | 未作成 | 未着手 |
+| P0 | この計画の資料 | `docs/handover/` | メインセッション | `chore/csharp-wpf-migration-plan` | main | [#49](https://github.com/ktysne/agent-limit-checker/pull/49) | マージ済み(2026-10-10 確認) |
+| P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | [#50](https://github.com/ktysne/agent-limit-checker/pull/50) | マージ済み(2026-10-11 確認) |
+| P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | [#51](https://github.com/ktysne/agent-limit-checker/pull/51) | マージ済み(2026-10-11 確認) |
+| P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | [#52](https://github.com/ktysne/agent-limit-checker/pull/52) | マージ済み(2026-10-11 確認) |
+| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | [#53](https://github.com/ktysne/agent-limit-checker/pull/53) | マージ済み(2026-10-11 確認) |
+| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | [#54](https://github.com/ktysne/agent-limit-checker/pull/54) | マージ済み(2026-10-11 確認) |
+| P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | [#55](https://github.com/ktysne/agent-limit-checker/pull/55) | マージ済み(2026-10-11 確認) |
+| P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | [#56](https://github.com/ktysne/agent-limit-checker/pull/56) | マージ済み(2026-10-11 確認) |
+| P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | [#57](https://github.com/ktysne/agent-limit-checker/pull/57) | マージ済み(2026-10-11 確認) |
+| P9 | 配布ページと発行:`site/` の 3 つの雛形、`tools/release-site.js` とそのテスト、`build-package.bat`、`tools/deploy.config.example.json` | `site/`、`tools/`、`build-package.bat`、`package.json` | standard | `feature/csharp-wpf-p9-release` | P8 | [#58](https://github.com/ktysne/agent-limit-checker/pull/58) | マージ済み(2026-10-11 確認) |
+| P10 | Electron 版の削除 | `main.js`、`preload.js`、`src/`、`renderer/`、`test/`、`smoke-test.js`、`package.json` | light | `feature/csharp-wpf-p10-remove-electron` | P9 | [#59](https://github.com/ktysne/agent-limit-checker/pull/59) | マージ済み(2026-10-11 確認) |
+| P11 | ドキュメントの整備:README、`docs/development.md`、`docs/design.md`、CLAUDE.md、AGENTS.md、`.cross-review.md` | `README.md`、`docs/`、`CLAUDE.md` ほか | standard | `feature/csharp-wpf-p11-docs` | P10 | [#60](https://github.com/ktysne/agent-limit-checker/pull/60) | マージ済み(2026-10-11 確認) |
 | 統合 | 実機での安定の確認後、統合ブランチを main へ | — | — | `feature/csharp-wpf` | main | 未作成 | 未着手 |
 | 発行 | `build-package.bat` で 4.0.0 を発行し、配布ページと `update-v2.json` を公開する | — | 開発者 | main | — | — | 未着手 |
 
@@ -119,7 +144,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 次は開発者が行う。どれも P9 の発行の確認と、統合後の 4.0.0 の発行より前に要る。
 
-- アプリアイコンの作成。置き場は agent-gc にならい `assets/icon.ico`、`assets/icon.png`、サイト用の `site/assets/app-icon-256.png` とする。届くまでは今の `assets/app-icon.ico` を仮に使う。
+- アプリアイコンの作成(2026-10-10 に配置済み)。元画像は背景ありの `assets/icon.png` を使い、背景なしが要る箇所だけ `assets/icon-transparent.png` を使う(開発者の指定)。exe とトレイの `dotnet/AgentLimitChecker.App/app.ico` は `python tools/make-app-icon.py` で作る。P9 でサイト用の `site/assets/app-icon-256.png` も同じスクリプトで作る。Electron 版の `assets/app-icon.ico` は P10 で消す。
 - 発行先の準備。ktysne.info に `/agent-limit-checker/` を用意し、`tools/deploy.config.json`(コミットしない)に FTPS の接続情報を書く。
 
 ## 実機での確認(統合ブランチを main へ入れる前)
@@ -133,18 +158,16 @@ P0 だけは文書のみの変更なので main へ向ける。
 5. ntfy への通知が、リセットの時刻とクレジットの期限で届く。
 6. 自動起動でログオン時に起動し、`--hidden` でポップオーバーを出さずに常駐する。
 7. 数日間の常駐で、メモリーの増加と `codex` の子プロセスの残りが無い。
-8. 開発用の manifest で、更新の通知、今すぐ更新、後で、このバージョンをスキップの 3 つが動く。更新の後も自動起動が働く。
+8. 開発用の manifest(`AGENT_LIMIT_CHECKER_UPDATE_MANIFEST_URL`)で、バルーン通知、トレイのメニューの「アップデートがあります」、更新の画面の「更新する」と「配布ページを開く」が動く。更新の後も自動起動が働く。手順は PR #57 の「確認して欲しいポイント」にある。「この版をスキップ」は置いていない(P8 で仮に決めた点)。
 
 ## 落とし穴
 
 - Electron 版と C# 版は単一インスタンスの仕組みが別なので、同時に起動できてしまう。両方が同じ `settings.json` を書き、同じ CLI の資格情報を更新するので、実機で試すときは Electron 版を終了しておく。
-- Electron 版がトレイで動いている間は `npm start` がすぐ終わる(CLAUDE.md「アプリ稼働中の編集」)。見比べるときは portable exe を終了してから起動する。
-- Electron 版が登録した Run キーの値の名前と、`getLoginItemSettings` が見る形式は未確認である。P7 の前に `test/login-item-probe.js` で実際の値を確かめる。
-- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。`.cmd` は `cmd /d /s /c` を、`.ps1` は `powershell -File` を経て起動する必要がある(`src/codexProvider.js` の起動の分岐を参照)。
+- Release 構成の exe は、設定で自動起動が有効なら、起動時に Run キー `com.agent-limit-checker.app` を自分の exe で登録し直す。開発者の環境で試した後は、使っている exe を起動し直して戻す。Debug 構成は登録し直さない。
+- npm で入れた `codex` の実体は `.cmd` か `.ps1` である。npm の `.ps1` の shim は標準入力を `$input |` で渡すので、`powershell -File` 経由では入力が終わるまで node へ届かず、`initialize` がタイムアウトする。C# 版は、shim と同じ規則で `node` と `node_modules/@openai/codex/bin/codex.js` を直接起動して避ける(3.x の Electron 版にはこの対策が無い)。
 - 自動アップデートは、%TEMP% からの起動と書き込めない場所(Program Files など)では自動で適用できない。agent-gc と同じく、その場合はブラウザで zip を開く動きにする。
-- 発行の手順の違いに注意する。screen-recorder はタグを先に push し、Release をソースのリポジトリに作る。agent-gc は送信の後にタグを push する。この計画では agent-gc の順に合わせる。
-- `build-package.bat` は Node 22.15 以上と `basic-ftp` を前提にする。`package.json` の `devDependencies` に `basic-ftp` を足す。
-- ai-cross-review の観点ファイル `.cross-review.md` は Electron 前提で書かれている。P1 のレビューから C# の観点(資格情報をログに出さない、子プロセスの後始末、UI スレッドを止めない)を足しておく。正式な書き換えは P11 で行う。
+- 発行の順は agent-gc と逆で、ビルドしたコミットにタグを付けて push してから `gh release create --verify-tag` で Release を作る。Release をソースのリポジトリに作るので、タグが無いまま gh に作らせると既定のブランチの先頭に付き、ビルドしたコミットとずれるためである。タグの push の後で `gh` が使えないとタグだけが公開されるので、発行の前に `gh auth status` を確かめる。
+- `build-package.bat` は Node 22.15 以上、`basic-ftp`(`npm install`)、`gh` を前提にする。
 - Windows の Bash ツールでは、続けて書いた `\` が半分になる(anthropics/claude-code#98622)。パスを含むスクリプトは、ファイルに書いてから実行する。
 
 ## 参照する手本
@@ -162,8 +185,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 ## 次のセッションの開始用プロンプト
 
 ```text
-docs/handover/2026-10-10-csharp-wpf-migration.md を読み、C# + WPF への移行を進めてください。
-統合ブランチ feature/csharp-wpf を最新の origin/main から作って push し、P1 から順に、計画の区分で実装を委譲してください。
-各段の PR は計画の表のとおりスタック式で積み、段ごとにクロスレビューの三択を提示してください。
-進んだら、計画の表の「PR」と「状態」の列を更新してください。
+docs/handover/2026-10-10-csharp-wpf-migration.md を読み、C# + WPF への移行の続きを進めてください。
+まず「現在地と次にやること」を、gh で統合ブランチ feature/csharp-wpf から main への PR の状態と照合してください。
+main へのマージと 4.0.0 の発行が済んでいたら、資料の冒頭に完了した日付を足し、メモリーの計画への参照を消してください。
 ```
