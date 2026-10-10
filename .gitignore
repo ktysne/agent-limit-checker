@@ -2,6 +2,11 @@ node_modules/
 dist/
 *.log
 electron-run.log
+[Bb]in/
+[Oo]bj/
+TestResults/
+artifacts/
+.vs/
 _reference/
 .cache/
 # .claude/ はローカル設定 (settings.local.json 等) を除外しつつ cross-review スキルだけ追跡する

@@ -8,7 +8,7 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 アプリの機能の追加と見た目の刷新は対象から外し、今の機能と挙動をそのまま移す。
 移行と改善を同じ差分に混ぜると、回帰の原因を切り分けられないためである。
 次の 2 つも対象から外す。
-- アプリアイコンの作成:開発者が行う。
+- アプリアイコンの作成:開発者が行う(2026-10-10 に `assets/icon.png` と `assets/icon-transparent.png` を配置済み)。
 - ktysne.info のトップページで、上部のエフェクターの UI から個別ページへリンクすること:4.0.0 の発行の後に対応する。[ktysne/ktysne-top#20](https://github.com/ktysne/ktysne-top/issues/20) で追う。
 
 ## 現在地と次にやること
@@ -51,6 +51,27 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 - 非同期処理は `async`/`await` で書き、UI への反映は `Dispatcher` を経る。取得の処理は UI スレッドを止めない。
 - exe の名前は `AgentLimitChecker.exe`、zip の名前は `AgentLimitChecker-X.Y.Z-win-x64.zip` にする。zip の中身は agent-gc と同じく exe、`manual.html`、`license.html` の 3 つにする。
 
+### 表示倍率とフォントの要件
+
+開発者は 4K のディスプレイを 150% の表示倍率で使っている(作業領域は約 2560×1400 の論理ピクセル)。
+表示倍率の不具合とフォントの見た目は、移行で崩れやすいので、各段で次を守る(2026-10-10 開発者の指定)。
+
+- DPI の扱い
+  - `app.manifest` で Per-Monitor V2 を宣言する(`dpiAwareness` に `PerMonitorV2`)。WinForms の部品(`NotifyIcon` とそのメニュー)も同じプロセスなので、この宣言に従う。
+  - Win32 の API(`Shell_NotifyIconGetRect`、`GetMonitorInfo`)は物理ピクセルを返し、WPF の `Left`、`Top`、`Width`、`Height` は論理単位(1/96 インチ)である。位置は、表示先のモニターの DPI で換算する。モニターごとの DPI は `GetDpiForMonitor` で得る。換算を混ぜると、150% でポップオーバーの位置と大きさが 1.5 倍ずれる。
+  - 倍率の違うモニターへ移ったときは `DpiChanged` を受けて、位置と大きさを決め直す。
+  - 細い線と枠がぼけないよう、ルートで `UseLayoutRounding="True"` を有効にする。
+  - トレイのアイコンは、`SystemInformation.SmallIconSize`(150% では 24px)の大きさの画像を渡す。16px の画像を拡大させると、ぼける。P5 で数値を描くアイコンも、この大きさで描く。
+  - トレイのメニューの文字の大きさと位置が、150% で正しいかを実機で確かめる。崩れるなら、WPF の `ContextMenu` に替える。
+- フォント
+  - 目標は Electron 版と同じ見た目である。今のポップオーバーは `font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif` で、基準の大きさは 13px である(`renderer/style.css`)。
+  - WPF の既定のフォントは、日本語の文字に意図しない代替のフォントを使うことがある。ルートの `FontFamily` に `Segoe UI, Yu Gothic UI, Meiryo` を明示し、`Language` を `ja-JP` にする。
+  - CSS の px と WPF の論理単位は同じ大きさ(1/96 インチ)なので、`style.css` の `font-size` と `font-weight` の値をそのまま使う。
+  - `AllowsTransparency="True"` は使わない。文字のアンチエイリアスが ClearType からグレースケールに落ち、にじんで見えるためである。Electron 版のポップオーバーも透過していない(`main.js` の `transparent: false`)。
+  - `TextOptions.TextFormattingMode` と `TextRenderingMode` は、150% で Electron 版のスクリーンショットと並べて比べ、近いほうに決める。
+- 確かめ方
+  - P1、P5、P6 では、150% のモニターで、発行した exe の画面のスクリーンショットを撮る。P6 では Electron 版の同じ状態のスクリーンショットと並べ、文字の形、大きさ、太さ、にじみ、余白を比べる。比べた画像は PR に貼る。
+
 ### Electron 版との対応
 
 | Electron 版 | C# 版での置き換え |
@@ -65,7 +86,7 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 | `node:https` | `HttpClient` |
 | `child_process.spawn` | `Process`。`codex app-server` は標準入出力をリダイレクトし、Job Object で終了時に子プロセスを道連れにする |
 | `nativeImage`(トレイアイコンの生成) | `WriteableBitmap` か GDI+ で描き、`Icon` に変換する |
-| `app.getPath('logs')` | `%APPDATA%\agent-limit-checker\logs`(Electron 版と同じ場所かは未確認。P1 で確かめる) |
+| `app.getPath('logs')` | `%APPDATA%\agent-limit-checker\logs`の `agent-limit-checker.log`。Electron 版と同じファイルで、P1 で追記されることを確かめた |
 | `node --test` | `dotnet test`(xUnit) |
 | `electron-builder` の portable exe | `dotnet publish` の単一 exe を `build-package.bat` で zip にする |
 
@@ -119,7 +140,7 @@ P0 だけは文書のみの変更なので main へ向ける。
 
 次は開発者が行う。どれも P9 の発行の確認と、統合後の 4.0.0 の発行より前に要る。
 
-- アプリアイコンの作成。置き場は agent-gc にならい `assets/icon.ico`、`assets/icon.png`、サイト用の `site/assets/app-icon-256.png` とする。届くまでは今の `assets/app-icon.ico` を仮に使う。
+- アプリアイコンの作成(2026-10-10 に配置済み)。元画像は背景ありの `assets/icon.png` を使い、背景なしが要る箇所だけ `assets/icon-transparent.png` を使う(開発者の指定)。exe とトレイの `dotnet/AgentLimitChecker.App/app.ico` は `python tools/make-app-icon.py` で作る。P9 でサイト用の `site/assets/app-icon-256.png` も同じスクリプトで作る。Electron 版の `assets/app-icon.ico` は P10 で消す。
 - 発行先の準備。ktysne.info に `/agent-limit-checker/` を用意し、`tools/deploy.config.json`(コミットしない)に FTPS の接続情報を書く。
 
 ## 実機での確認(統合ブランチを main へ入れる前)

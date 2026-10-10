@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/dotnet/">
+    <Project Path="dotnet/AgentLimitChecker.App/AgentLimitChecker.App.csproj" />
+    <Project Path="dotnet/AgentLimitChecker.Core/AgentLimitChecker.Core.csproj" />
+    <Project Path="dotnet/AgentLimitChecker.Tests/AgentLimitChecker.Tests.csproj" />
+  </Folder>
+</Solution>
