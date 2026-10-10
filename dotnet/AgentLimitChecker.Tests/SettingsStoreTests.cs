@@ -6,7 +6,8 @@ namespace AgentLimitChecker.Tests;
 
 public sealed class SettingsStoreTests
 {
-    private const string DefaultSettingsJson = """
+    // 生文字列の改行は checkout 時の改行設定で CRLF になり得るので、保存形式と同じ LF にそろえる。
+    private static readonly string DefaultSettingsJson = """
         {
           "pollingIntervalSec": 300,
           "autoLaunch": false,
@@ -20,9 +21,9 @@ public sealed class SettingsStoreTests
           },
           "codexAccountNames": {}
         }
-        """;
+        """.ReplaceLineEndings("\n");
 
-    private const string FullSettingsJson = """
+    private static readonly string FullSettingsJson = """
         {
           "pollingIntervalSec": 60,
           "autoLaunch": true,
@@ -38,7 +39,7 @@ public sealed class SettingsStoreTests
             ".codex-review": "レビュー用"
           }
         }
-        """;
+        """.ReplaceLineEndings("\n");
 
     [Fact]
     public void NormalizeSettings_DefaultsCodexAccountNamesToAnEmptyMap()

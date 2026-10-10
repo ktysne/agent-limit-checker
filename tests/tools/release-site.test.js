@@ -158,6 +158,35 @@ test('upload --dry-run は送信予定を表示し、外部サービスに接続
       ]);
       assert.ok(lines.some(line => line.includes('update-v2.json')));
       assert.ok(lines.some(line => line.includes('接続しません')));
+      assert.match(result.configProblem, /FTPS の接続情報がありません/);
+      assert.ok(lines.some(line => line.startsWith('要確認: tools/deploy.config.json')));
+    } finally {
+      console.log = oldLog;
+    }
+  });
+});
+
+test('upload --dry-run は接続情報を読めれば configProblem を返さない', async () => {
+  await withTempDir(async directory => {
+    const { output, zipPath } = createReleaseFixture(directory);
+    const oldLog = console.log;
+    console.log = () => {};
+    try {
+      const result = await releaseSite.cmdUpload({
+        version: VERSION,
+        out: output,
+        zip: zipPath,
+        dryRun: true,
+        config: path.join(directory, 'missing.json'),
+      }, {
+        env: {
+          AGENT_LIMIT_CHECKER_FTP_HOST: 'ftp.example.invalid',
+          AGENT_LIMIT_CHECKER_FTP_USER: 'dummy-user',
+          AGENT_LIMIT_CHECKER_FTP_PASSWORD: 'dummy-password',
+          AGENT_LIMIT_CHECKER_FTP_REMOTE_ROOT: '/agent-limit-checker',
+        },
+      });
+      assert.equal(result.configProblem, null);
     } finally {
       console.log = oldLog;
     }
