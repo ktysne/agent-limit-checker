@@ -1,6 +1,7 @@
 using System.Windows.Interop;
 using System.Windows.Threading;
 using AgentLimitChecker.App.Views;
+using AgentLimitChecker.Core.Updates;
 using AgentLimitChecker.Core.Shell;
 using Forms = System.Windows.Forms;
 
@@ -19,10 +20,10 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
     private bool positionQueued;
     private bool disposed;
 
-    internal PopoverDetailsPresenter(ShellController controller, Func<Forms.NotifyIcon?> tray, Action quit)
+    internal PopoverDetailsPresenter(ShellController controller, Func<Forms.NotifyIcon?> tray, Action quit, UpdateMonitor? updates = null, Action? showUpdate = null)
     {
         this.controller = controller; this.tray = tray;
-        window = new(controller, quit);
+        window = new(controller, quit, updates, showUpdate);
         fade = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnFade, window.Dispatcher);
         fade.Stop();
         window.HideRequested += Hide;

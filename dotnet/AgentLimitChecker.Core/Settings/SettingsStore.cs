@@ -99,7 +99,7 @@ public sealed class SettingsStore
         {
             foreach (var property in raw)
             {
-                if (property.Key is "pollingIntervalSec" or "autoLaunch" or "ntfy" or "codexAccountNames") continue;
+                if (property.Key is "pollingIntervalSec" or "autoLaunch" or "ntfy" or "codexAccountNames" or "checkForUpdatesOnStartup") continue;
                 if (property.Value is not null)
                 {
                     additionalProperties[property.Key] = JsonSerializer.Deserialize<JsonElement>(property.Value.ToJsonString());
@@ -115,6 +115,7 @@ public sealed class SettingsStore
         {
             PollingIntervalSec = interval is { } allowed && AllowedIntervals.Contains(allowed) ? allowed : 300,
             AutoLaunch = IsTruthy(raw?["autoLaunch"]),
+            CheckForUpdatesOnStartup = raw?["checkForUpdatesOnStartup"] is null || IsTruthy(raw["checkForUpdatesOnStartup"]),
             Ntfy = new NtfySettings
             {
                 TopicUrl = ReadTrimmedString(ntfy?["topicUrl"]),

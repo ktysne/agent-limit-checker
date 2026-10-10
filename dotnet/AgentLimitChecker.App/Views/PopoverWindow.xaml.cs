@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using AgentLimitChecker.App.ViewModels;
 using AgentLimitChecker.Core.Shell;
+using AgentLimitChecker.Core.Updates;
 using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
 using Color = System.Windows.Media.Color;
@@ -16,6 +17,8 @@ public partial class PopoverWindow : Window
 {
     private readonly ShellController? controller;
     private readonly Action quit;
+    private readonly UpdateMonitor? updates;
+    private readonly Action? showUpdate;
     private readonly PopoverViewModel model = new();
     private readonly List<(string Label, TextBox Input)> nameInputs = [];
     private ShellSnapshot? snapshot;
@@ -23,12 +26,16 @@ public partial class PopoverWindow : Window
     public bool HideOnDeactivate { get; set; } = true;
     public event Action? HideRequested;
 
-    public PopoverWindow(ShellController? controller, Action quit)
+    public PopoverWindow(ShellController? controller, Action quit, UpdateMonitor? updates = null, Action? showUpdate = null)
     {
         this.controller = controller;
         this.quit = quit;
+        this.updates = updates;
+        this.showUpdate = showUpdate;
         InitializeComponent();
         DataContext = model;
+        if (updates is not null) updates.Changed += OnUpdateChanged;
+        Closed += (_, _) => { if (updates is not null) updates.Changed -= OnUpdateChanged; };
     }
 
     public void UpdateSnapshot(ShellSnapshot value, double? now = null)
@@ -42,6 +49,8 @@ public partial class PopoverWindow : Window
             model.Update(value, now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             Interval.SelectedValue = value.Settings.PollingIntervalSec.ToString(System.Globalization.CultureInfo.InvariantCulture);
             AutoLaunch.IsChecked = value.AutoLaunchEnabled;
+            CheckUpdatesOnStartup.IsChecked = value.Settings.CheckForUpdatesOnStartup;
+            UpdateUpdateControls();
             var config = value.Settings.Ntfy;
             if (!TopicUrl.IsKeyboardFocusWithin) TopicUrl.Text = config.TopicUrl;
             if (!AccessToken.IsKeyboardFocusWithin) AccessToken.Password = config.AccessToken;
@@ -121,6 +130,27 @@ public partial class PopoverWindow : Window
         if (!updating && Interval.SelectedValue is string seconds && int.TryParse(seconds, out var value)) controller?.SetPollingInterval(value);
     }
     private void OnAutoLaunch(object sender, RoutedEventArgs e) { if (!updating) controller?.SetAutoLaunch(AutoLaunch.IsChecked == true); }
+    private void OnUpdateChanged(UpdateMonitorSnapshot value) => Dispatcher.BeginInvoke(UpdateUpdateControls);
+    private void UpdateUpdateControls()
+    {
+        CheckUpdatesButton.IsEnabled = updates is not null && !updates.Snapshot.Checking;
+        CheckUpdatesButton.Content = updates?.Snapshot.Checking == true ? "確認しています…" : "アップデートを確認";
+        UpdateStatus.Text = updates?.Snapshot.StatusText ?? "";
+    }
+    private void OnCheckUpdatesSetting(object sender, RoutedEventArgs e)
+    {
+        if (!updating) controller?.SetCheckForUpdatesOnStartup(CheckUpdatesOnStartup.IsChecked == true);
+    }
+    private async void OnCheckUpdates(object sender, RoutedEventArgs e)
+    {
+        if (updates is null) return;
+        await updates.CheckAsync();
+        if (updates.Snapshot.Available is not null)
+        {
+            HideRequested?.Invoke();
+            showUpdate?.Invoke();
+        }
+    }
     private void OnAccountName(object sender, KeyboardFocusChangedEventArgs e) => SaveName((TextBox)sender);
     private void SaveName(TextBox input)
     {

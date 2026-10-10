@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\AgentLimitChecker.App\ViewModels\UpdateAvailableViewModel.cs" Link="ViewModels\UpdateAvailableViewModel.cs" />
     <Using Include="Xunit" />
     <ProjectReference Include="..\AgentLimitChecker.Core\AgentLimitChecker.Core.csproj" />
   </ItemGroup>

@@ -180,6 +180,16 @@ public sealed class ShellController : IDisposable
         }
     }
 
+    public void SetCheckForUpdatesOnStartup(bool enabled)
+    {
+        lock (gate)
+        {
+            if (disposed) return;
+            settings.Save(new JsonObject { ["checkForUpdatesOnStartup"] = enabled });
+            Publish();
+        }
+    }
+
     public void SetNtfySettings(JsonObject partial)
     {
         lock (gate)
