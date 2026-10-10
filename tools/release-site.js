@@ -486,17 +486,23 @@ async function cmdUpload(opt, dependencies = {}) {
   const items = uploadItems(output);
   if (opt.dryRun) {
     let remoteRoot = null;
+    let configProblem = null;
     try {
       remoteRoot = remoteRootOf(loadConfig(opt.config, dependencies.env ?? process.env));
-    } catch {}
+    } catch (error) {
+      configProblem = error.message;
+    }
     console.log('FTPS 送信計画 (remoteRoot: ' + (remoteRoot ?? '(未設定)') + '):');
     for (const item of items) {
       const size = fs.statSync(item.localPath).size;
       console.log('  ' + item.label + ' (' + formatSize(size) + ')');
     }
     console.log('  GitHub Release: v' + opt.version + ' / ' + zipFileName(opt.version));
+    if (configProblem) {
+      console.log('要確認: tools/deploy.config.json か AGENT_LIMIT_CHECKER_FTP_* の環境変数で FTPS の接続情報を用意してください: ' + configProblem);
+    }
     console.log('--dry-run のため、GitHub、配布サイト、FTP サーバへ接続しません。');
-    return { dryRun: true, items };
+    return { dryRun: true, items, configProblem };
   }
 
   await checkPublishedVersion(opt.version, dependencies.fetchManifest ?? globalThis.fetch);
@@ -554,7 +560,11 @@ async function main(argv = process.argv.slice(2)) {
     console.log((await publishedVersionOf()) ?? '');
     return;
   }
-  if (opt.command === 'upload') return cmdUpload(opt);
+  if (opt.command === 'upload') {
+    const result = await cmdUpload(opt);
+    if (result.configProblem) process.exitCode = 1;
+    return result;
+  }
   printUsage();
   process.exitCode = 1;
 }

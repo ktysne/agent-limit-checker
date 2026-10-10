@@ -2,6 +2,14 @@
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+set "DRYRUN="
+if /i "%~1"=="--dry-run" set "DRYRUN=1"
+if not "%~1"=="" if not defined DRYRUN (
+    echo [agent-limit-checker] ERROR: unknown argument "%~1". Usage: build-package.bat [--dry-run]
+    goto :failed
+)
+if defined DRYRUN echo [agent-limit-checker] Dry run: no tag, GitHub Release or site upload will be made.
+
 if exist "%LOCALAPPDATA%\Microsoft\dotnet\dotnet.exe" set "PATH=%LOCALAPPDATA%\Microsoft\dotnet;%PATH%"
 set "CONFIG=Release"
 
@@ -38,6 +46,11 @@ if errorlevel 1 (
 
 set "DIRTY="
 for /f "delims=" %%L in ('git status --porcelain --untracked-files^=normal') do set "DIRTY=1"
+if defined DIRTY if defined DRYRUN (
+    echo [agent-limit-checker] WARNING: the worktree has uncommitted changes. A real run stops here.
+    git status --short
+    set "DIRTY="
+)
 if defined DIRTY (
     echo [agent-limit-checker] ERROR: commit or discard all worktree changes before packaging.
     git status --short
@@ -179,6 +192,7 @@ echo   manual.html: build\release\manual.html
 echo   license.html: build\release\license.html
 echo   update-v2.json: build\release\update-v2.json
 echo.
+if defined DRYRUN goto :dryrun
 set "UPLOAD="
 set /p "UPLOAD=Create the GitHub Release and upload the site files now? (y/N): "
 if /i not "!UPLOAD!"=="y" (
@@ -186,6 +200,8 @@ if /i not "!UPLOAD!"=="y" (
     goto :done
 )
 
+call :checkgh
+if errorlevel 1 goto :failed
 if not defined TAG_EXISTS (
     git tag -a "%TAG%" "%BUILD_HASH%" -m "Release %TAG%"
     if errorlevel 1 goto :tagcreatefailed
@@ -197,6 +213,52 @@ node --use-system-ca tools\release-site.js upload --version %CURVER% --out build
 if errorlevel 1 goto :uploadfailed
 echo [agent-limit-checker] GitHub Release and site upload completed.
 goto :done
+
+:dryrun
+echo [agent-limit-checker] Dry run: checking what the upload would need.
+set "DRYRUN_PROBLEM="
+call :checkgh
+if errorlevel 1 set "DRYRUN_PROBLEM=1"
+if defined TAG_EXISTS (
+    echo [agent-limit-checker] Tag %TAG% already exists locally at the build commit and would be pushed.
+) else (
+    echo [agent-limit-checker] Tag %TAG% would be created at %BUILD_HASH% and pushed.
+)
+set "REMOTE_TAG="
+for /f "tokens=1" %%R in ('git ls-remote --tags origin "refs/tags/%TAG%" 2^>nul') do set "REMOTE_TAG=%%R"
+if defined REMOTE_TAG if not defined TAG_EXISTS (
+    echo [agent-limit-checker] ERROR: origin already has %TAG%, but there is no local tag. Fetch the tag first.
+    set "DRYRUN_PROBLEM=1"
+)
+node --use-system-ca tools\release-site.js upload --version %CURVER% --out build\release --zip "!ZIP!" --dry-run
+if errorlevel 1 set "DRYRUN_PROBLEM=1"
+echo.
+if defined DRYRUN_PROBLEM (
+    echo [agent-limit-checker] Dry run finished with problems. Fix them before a real run.
+    goto :pausefail
+)
+echo [agent-limit-checker] Dry run finished. A real run would tag, create the GitHub Release and upload the site.
+goto :done
+
+:checkgh
+where gh >nul 2>nul
+if errorlevel 1 (
+    echo [agent-limit-checker] ERROR: GitHub CLI gh was not found on PATH.
+    exit /b 1
+)
+gh auth status >nul 2>nul
+if errorlevel 1 (
+    echo [agent-limit-checker] ERROR: gh is not logged in. Run "gh auth login" first.
+    exit /b 1
+)
+set "GH_PUSH="
+for /f "delims=" %%A in ('gh api repos/ktysne/agent-limit-checker --jq .permissions.push 2^>nul') do set "GH_PUSH=%%A"
+if /i not "!GH_PUSH!"=="true" (
+    echo [agent-limit-checker] ERROR: the gh account cannot write to ktysne/agent-limit-checker.
+    exit /b 1
+)
+echo [agent-limit-checker] gh can create releases in ktysne/agent-limit-checker.
+exit /b 0
 
 :uploadfailed
 echo.

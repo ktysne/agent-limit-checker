@@ -75,10 +75,31 @@ Release ビルドは設定で自動起動が有効な場合、起動時に Run �
 続けて C# のテストと発行ツールのテストを実行し、Release exe とサイトのページを生成します。
 配布 zip が `AgentLimitChecker.exe`、`manual.html`、`license.html` の 3 ファイルだけを含むことを確認し、`update-v2.json` を作って C# 側の manifest テストでも受け入れられることを検証します。
 
-アップロードを選ぶと、スクリプトはビルドしたコミットを指す注釈付きタグ `vX.Y.0` を作成して push し、その後に GitHub Release とサイトを更新します。
-タグの push の後で `gh` が使えないと、タグだけが公開されて Release とサイトが更新されないため、事前に `gh auth status` を確かめてください。
+アップロードを選ぶと、スクリプトは `gh` がログイン済みで `ktysne/agent-limit-checker` へ書き込めることを確かめます。
+続けて、ビルドしたコミットを指す注釈付きタグ `vX.Y.0` を作成して push し、その後に GitHub Release とサイトを更新します。
 Release 作成時に既存タグを検証するため、Release を作る前にタグをリモートへ置きます。
+`gh` を先に確かめるのは、タグの push の後で `gh` が使えないと、タグだけが公開されて Release とサイトが更新されないためです。
 アップロードを選ばなければ、作成した zip とサイト用ファイルをローカルに残します。
+
+### dry-run
+
+本番の前に、アップロードの直前までを次のコマンドで確かめられます。
+
+```powershell
+.\build-package.bat --dry-run
+```
+
+dry-run は、テスト、Release exe の発行、zip とサイト用ファイルの生成までを本番と同じに行います。
+作業ツリーに未コミットの変更があっても止まらず、警告だけを出します。
+アップロードの確認では止まらず、次を確かめて結果を表示します。
+
+- `gh` がログイン済みで、`ktysne/agent-limit-checker` へ書き込めること
+- 作成して push するタグと、そのコミット
+- origin に同じ名前のタグが既にあるのに、ローカルに無い状態でないこと
+- FTPS の接続情報を読めること、送信するファイルの一覧
+
+タグの作成と push、GitHub Release の作成、FTPS への送信は行いません。
+問題が見つかると、最後に `Dry run finished with problems.` を表示して終了コード 1 で終わります。
 
 配布先の接続設定は、[`tools/deploy.config.example.json`](../tools/deploy.config.example.json) を `tools/deploy.config.json` にコピーして入力します。
 実設定ファイルは認証情報を含むため Git の対象外です。
