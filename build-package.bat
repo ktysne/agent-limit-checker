@@ -225,9 +225,23 @@ if defined TAG_EXISTS (
     echo [agent-limit-checker] Tag %TAG% would be created at %BUILD_HASH% and pushed.
 )
 set "REMOTE_TAG="
-for /f "tokens=1" %%R in ('git ls-remote --tags origin "refs/tags/%TAG%" 2^>nul') do set "REMOTE_TAG=%%R"
+set "REMOTE_LIST=build\release\remote-tag.txt"
+git ls-remote --tags origin "refs/tags/%TAG%" > "!REMOTE_LIST!"
+if errorlevel 1 (
+    echo [agent-limit-checker] ERROR: could not query tags on origin. Check the git connection to origin.
+    set "DRYRUN_PROBLEM=1"
+) else (
+    for /f "usebackq tokens=1,2" %%R in ("!REMOTE_LIST!") do if "%%S"=="refs/tags/%TAG%" set "REMOTE_TAG=%%R"
+)
+del /q "!REMOTE_LIST!" >nul 2>nul
+set "LOCAL_TAG_OBJECT="
+if defined TAG_EXISTS for /f "delims=" %%O in ('git rev-parse "refs/tags/%TAG%"') do set "LOCAL_TAG_OBJECT=%%O"
 if defined REMOTE_TAG if not defined TAG_EXISTS (
     echo [agent-limit-checker] ERROR: origin already has %TAG%, but there is no local tag. Fetch the tag first.
+    set "DRYRUN_PROBLEM=1"
+)
+if defined REMOTE_TAG if defined TAG_EXISTS if /i not "!REMOTE_TAG!"=="!LOCAL_TAG_OBJECT!" (
+    echo [agent-limit-checker] ERROR: %TAG% on origin differs from the local tag, so the push would be rejected.
     set "DRYRUN_PROBLEM=1"
 )
 node --use-system-ca tools\release-site.js upload --version %CURVER% --out build\release --zip "!ZIP!" --dry-run
