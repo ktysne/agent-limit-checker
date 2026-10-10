@@ -95,7 +95,7 @@ dry-run は、テスト、Release exe の発行、zip とサイト用ファイ�
 
 - `gh` がログイン済みで、`ktysne/agent-limit-checker` へ書き込めること
 - 作成して push するタグと、そのコミット
-- origin に同じ名前のタグが既にあるのに、ローカルに無い状態でないこと
+- origin のタグを照会でき、同じ名前のタグがあればローカルのタグと同じオブジェクトを指すこと
 - FTPS の接続情報を読めること、送信するファイルの一覧
 
 タグの作成と push、GitHub Release の作成、FTPS への送信は行いません。
