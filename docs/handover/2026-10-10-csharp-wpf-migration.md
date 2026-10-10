@@ -13,8 +13,8 @@ Electron 版(main.js、`src/`、`renderer/`、合計約 4,700 行)を C# + WPF �
 
 ## 現在地と次にやること
 
-- この計画の資料だけができている。C# のコードはまだ無い。
-- 次のセッションは、統合ブランチ `feature/csharp-wpf` を最新の `origin/main` から作って push し、P1 から着手する。
+- 統合ブランチ `feature/csharp-wpf` を作成済みで、各段の PR を「対応順序、ブランチ、PR」の表のとおりスタック式に積んでいる。どこまで進んだかは表の「状態」の列を見る。
+- 次のセッションは、表で「未着手」の最初の段から着手する。その段のブランチは、1 段下のブランチの先頭から切る。
 
 ## 決定済みの判断
 
@@ -101,8 +101,8 @@ P0 だけは文書のみの変更なので main へ向ける。
 | P1 | 土台:ソリューション、テストの枠、単一インスタンス、終了だけのトレイ、ログ、`build-debug.bat` | `dotnet/`、`build-debug.bat` | standard | `feature/csharp-wpf-p1-scaffold` | `feature/csharp-wpf` | [#50](https://github.com/ktysne/agent-limit-checker/pull/50) | レビュー収束、マージ待ち(2026-10-10) |
 | P2 | Codex:CLI の探索、ホームの探索、`codex app-server` の JSON-RPC クライアント | `dotnet/AgentLimitChecker.Core/Providers/Codex*` | hard | `feature/csharp-wpf-p2-codex` | P1 | [#51](https://github.com/ktysne/agent-limit-checker/pull/51) | レビュー収束、マージ待ち(2026-10-10) |
 | P3 | Claude:資格情報の読み取り、利用量の取得、OAuth の更新、Retry-After | `dotnet/AgentLimitChecker.Core/Providers/Claude*` | hard | `feature/csharp-wpf-p3-claude` | P2 | [#52](https://github.com/ktysne/agent-limit-checker/pull/52) | レビュー収束、マージ待ち(2026-10-10) |
-| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | 作成予定 | 実装済み、PR 作成中(2026-10-10) |
-| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | 未作成 | 未着手 |
+| P4 | 設定と ntfy への通知 | `dotnet/AgentLimitChecker.Core/Settings*`、`Notifications/` | standard | `feature/csharp-wpf-p4-settings-ntfy` | P3 | [#53](https://github.com/ktysne/agent-limit-checker/pull/53) | レビュー収束、マージ待ち(2026-10-10) |
+| P5 | 取得の周期、トレイアイコンの描画、トレイのメニュー、ログイン用の端末の起動、ログイン完了の監視、自動の再認証 | `dotnet/AgentLimitChecker.App/` | hard | `feature/csharp-wpf-p5-shell` | P4 | 作成予定 | 実装済み、PR 作成中(2026-10-10) |
 | P6 | ポップオーバーの UI:各サービスの表示、週の配分の目安、Codex の複数アカウント、設定パネル、テーマ、位置、表示倍率 | `dotnet/AgentLimitChecker.App/Views/`、`ViewModels/` | hard | `feature/csharp-wpf-p6-popover` | P5 | 未作成 | 未着手 |
 | P7 | 自動起動(Run キー)と Electron 版からの移行、`build-release.bat` | `dotnet/AgentLimitChecker.App/AutoLaunch*`、`build-release.bat` | standard | `feature/csharp-wpf-p7-autolaunch` | P6 | 未作成 | 未着手 |
 | P8 | 自動アップデート:manifest の取得と検証、zip の取得と照合、適用役、元へ戻す処理、後始末、通知の画面、設定パネルの「アップデートを確認」とトレイメニュー | `dotnet/AgentLimitChecker.Core/Updates/`、`dotnet/AgentLimitChecker.App/Updates/` | hard | `feature/csharp-wpf-p8-update` | P7 | 未作成 | 未着手 |
