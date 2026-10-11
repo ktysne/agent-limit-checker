@@ -191,6 +191,7 @@ public partial class App : System.Windows.Application
             Text = TrayPresentation.StartupTooltip,
             Visible = true
         };
+        _notifyIcon.MouseDown += (_, _) => (_details as PopoverDetailsPresenter)?.OnTrayPressed();
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) RequestDetails(); };
         RebuildMenu(_shell.Snapshot);
     }

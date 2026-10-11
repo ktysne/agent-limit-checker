@@ -49,7 +49,7 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
     {
         window.Dispatcher.VerifyAccess();
         if (window.IsVisible && fadeTarget != 0) { Hide(); return false; }
-        if (trayClick.ConsumeSuppression(Environment.TickCount64)) return false;
+        if (trayClick.ConsumeSuppression()) return false;
         Show(snapshot); return true;
     }
 
@@ -80,6 +80,8 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
     }
 
     internal void Reposition() => QueuePosition();
+
+    internal void OnTrayPressed() => trayClick.OnTrayPressed(Environment.TickCount64);
 
     private void Position()
     {
