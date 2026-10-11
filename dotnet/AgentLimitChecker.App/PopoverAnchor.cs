@@ -35,6 +35,13 @@ internal readonly record struct PopoverAnchor(PopoverRect Tray, PopoverRect Work
         return new Rect { Left = point.X, Top = point.Y, Right = point.X, Bottom = point.Y };
     }
 
+    internal static bool CursorOnTray(Forms.NotifyIcon? icon)
+    {
+        var rect = TrayRect(icon);
+        GetCursorPos(out var point);
+        return point.X >= rect.Left && point.X <= rect.Right && point.Y >= rect.Top && point.Y <= rect.Bottom;
+    }
+
     internal static void Move(nint window, double leftPixels, double topPixels) =>
         SetWindowPos(window, 0, (int)Math.Round(leftPixels), (int)Math.Round(topPixels), 0, 0, 0x0015);
 
