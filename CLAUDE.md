@@ -13,14 +13,14 @@
 - 版の正本は `dotnet/AgentLimitChecker.App/AgentLimitChecker.App.csproj` の `Version`(既定の版)と、`build-release.bat`、`build-package.bat` で入力する版である。入力した版は `-p:Version=` でアセンブリに入り、アプリ内の表示、ログ、exe のファイルのバージョンに伝わる。
 - `package.json` は発行とレビューの道具のためだけにあり、`version` を持たない。
 
-### バンプ規則 (独自ルール: semver と一部異なる)
+### バンプ規則 (semver に従う)
 | 区分 | 例 | 何のとき |
 |---|---|---|
 | **major** | 4.0.0 → 5.0.0 | 大きな機能変更 (API/UX の刷新、互換性のない仕様変更、メジャー機能追加) |
-| **minor** | 4.0.0 → 4.1.0 | それ以外の機能変更 / バグ修正 |
-| **patch** | 4.0.0 → 4.0.1 | **使用しない** (上記 minor に集約) |
+| **minor** | 4.0.0 → 4.1.0 | 機能追加、互換性のある仕様変更 |
+| **patch** | 4.0.0 → 4.0.1 | バグ修正、利用者から見える振る舞いが変わらない修正 |
 
-> ⚠️ `patch` は意図的に運用していません。バグフィックスでも minor を上げます (ユーザ指定)。`build-release.bat` と `build-package.bat` は `X.Y.0` の形の版だけを受け付ける。
+`build-release.bat` と `build-package.bat` は `X.Y.Z`(数字 3 要素)の形の版を受け付ける。版の大小の比較は 3 要素すべてで行う。
 
 ### リリースのやり方 (運用フロー)
 PR は **版を触らずに** マージし、リリースしたいタイミングで `build-package.bat` を実行して版を入力する。
@@ -28,14 +28,14 @@ PR は **版を触らずに** マージし、リリースしたいタイミン�
 `build-package.bat` は次の順に進む(詳細は [docs/development.md](docs/development.md) の「パッケージ発行」)。
 1. 未コミットの変更が無いこと、同じ版のタグが無いこと、公開中の版より新しいことを確かめる。
 2. `dotnet test` と `npm test` を実行する。
-3. 単一 exe を発行し、`AgentLimitChecker-X.Y.0-win-x64.zip`、配布ページ、`update-v2.json` を作る。
-4. ビルドしたコミットにタグ `vX.Y.0` を付けて push し、GitHub の Release を作り、配布サイトへ送る。
+3. 単一 exe を発行し、`AgentLimitChecker-X.Y.Z-win-x64.zip`、配布ページ、`update-v2.json` を作る。
+4. ビルドしたコミットにタグ `vX.Y.Z` を付けて push し、GitHub の Release を作り、配布サイトへ送る。
 
 ### PR を作るときの判断
 - PR の説明に **どのレベルに該当するか** を明記すると後でリリース判断しやすい:
   - `Version impact: major (...)`
   - `Version impact: minor (feature)`
-  - `Version impact: minor (bugfix)`
+  - `Version impact: patch (bugfix)`
 - ただし **PR 自身は csproj の `Version` を変更しない**。版はリリース時に入力する。
 
 ### どこに version が現れるか

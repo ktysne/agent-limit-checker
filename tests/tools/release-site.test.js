@@ -36,10 +36,12 @@ function createReleaseFixture(directory) {
   return { output, zipPath, ...generated };
 }
 
-test('発行版は X.Y.0 だけを受け付ける', () => {
+test('発行版は X.Y.Z の 3 要素だけを受け付ける', () => {
   assert.equal(releaseSite.isValidVersion('4.0.0'), true);
-  assert.equal(releaseSite.isValidVersion('4.0.1'), false);
+  assert.equal(releaseSite.isValidVersion('4.0.1'), true);
   assert.equal(releaseSite.isValidVersion('4.1'), false);
+  assert.equal(releaseSite.isValidVersion('4.0.1.0'), false);
+  assert.equal(releaseSite.isValidVersion('4.0.1-rc1'), false);
   assert.equal(releaseSite.isValidReleasedAt(RELEASED_AT), true);
   assert.equal(releaseSite.isValidReleasedAt('2026-02-30'), false);
 });
@@ -295,6 +297,7 @@ test('build-package.bat は検査後に発行し、タグを push してから R
   assert.ok(order.every(index => index >= 0));
   assert.deepEqual(order, [...order].sort((left, right) => left - right));
   assert.match(batch, /--blame-hang-timeout 60s/);
-  assert.match(batch, /X\.Y\.0/);
+  assert.match(batch, /X\.Y\.Z/);
+  assert.doesNotMatch(batch, /X\.Y\.0/);
   assert.match(batch, /Add-Type -AssemblyName System\.IO\.Compression\.FileSystem -ErrorAction Stop; \$archive=/);
 });

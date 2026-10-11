@@ -9,10 +9,9 @@ if errorlevel 1 set "PATH=%LOCALAPPDATA%\Microsoft\dotnet;%PATH%"
 set VERSION=
 set /p VERSION=Enter version to publish as (e.g. 4.0.0, empty = keep csproj version):
 if not defined VERSION goto :versiondone
-rem The patch number is not used (CLAUDE.md "Versioning"), so only X.Y.0 is accepted.
-echo(!VERSION!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.0" >nul
+echo(!VERSION!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
 if errorlevel 1 (
-    echo [agent-limit-checker] Invalid version "!VERSION!". Use X.Y.0 like 4.0.0.
+    echo [agent-limit-checker] Invalid version "!VERSION!". Use X.Y.Z like 4.0.1.
     goto :askversion
 )
 :versiondone

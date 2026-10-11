@@ -81,9 +81,9 @@ echo [agent-limit-checker] Project version:   %PROJECTVER%
 set "VERSION="
 set /p "VERSION=Enter version to package as (e.g. 4.0.0, empty = keep project version): "
 if not defined VERSION goto :versiondone
-echo(!VERSION!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.0" >nul
+echo(!VERSION!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
 if errorlevel 1 (
-    echo [agent-limit-checker] Invalid version "!VERSION!". Use X.Y.0 like 4.0.0.
+    echo [agent-limit-checker] Invalid version "!VERSION!". Use X.Y.Z like 4.0.1.
     goto :askversion
 )
 :versiondone
@@ -92,9 +92,9 @@ set "VEROPT="
 if defined VERSION set "VEROPT=-p:Version=%VERSION%"
 set "CURVER=%VERSION%"
 if not defined CURVER set "CURVER=%PROJECTVER%"
-echo(!CURVER!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.0" >nul
+echo(!CURVER!| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
 if errorlevel 1 (
-    echo [agent-limit-checker] ERROR: could not resolve a version in X.Y.0 form.
+    echo [agent-limit-checker] ERROR: could not resolve a version in X.Y.Z form.
     goto :failed
 )
 
