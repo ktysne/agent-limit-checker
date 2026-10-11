@@ -20,7 +20,7 @@ const ASSET_NAMES = ['app-icon-256.png'];
 const FTP_PREFIX = 'AGENT_LIMIT_CHECKER_FTP_';
 
 function isValidVersion(value) {
-  return /^\d+\.\d+\.0$/.test(String(value ?? ''));
+  return /^\d+\.\d+\.\d+$/.test(String(value ?? ''));
 }
 
 function compareVersions(left, right) {
@@ -83,7 +83,7 @@ function templateValues(version, releasedAt) {
 }
 
 function validateReleaseInputs(version, releasedAt) {
-  if (!isValidVersion(version)) throw new Error('バージョンは X.Y.0 で指定してください: ' + version);
+  if (!isValidVersion(version)) throw new Error('バージョンは X.Y.Z で指定してください: ' + version);
   if (!isValidReleasedAt(releasedAt)) throw new Error('公開日は YYYY-MM-DD で指定してください: ' + releasedAt);
 }
 
@@ -146,7 +146,7 @@ function uploadItems(output) {
 }
 
 function verifyReleaseInputs(version, zipPath, output) {
-  if (!isValidVersion(version)) throw new Error('バージョンは X.Y.0 で指定してください: ' + version);
+  if (!isValidVersion(version)) throw new Error('バージョンは X.Y.Z で指定してください: ' + version);
   const missing = [zipPath, ...uploadItems(output).map(item => item.localPath)].filter(file => !fs.existsSync(file));
   if (missing.length) throw new Error('発行するファイルがありません: ' + missing.join(', '));
   const zipSize = fs.statSync(zipPath).size;
@@ -467,7 +467,7 @@ function cmdGeneratePages(opt) {
 }
 
 async function cmdCheckVersion(opt, dependencies = {}) {
-  if (!isValidVersion(opt.version)) throw new Error('バージョンは X.Y.0 で指定してください: ' + opt.version);
+  if (!isValidVersion(opt.version)) throw new Error('バージョンは X.Y.Z で指定してください: ' + opt.version);
   const latest = await checkPublishedVersion(opt.version, dependencies.fetchImpl ?? globalThis.fetch);
   if (latest) console.log('公開中: ' + latest.version + ' / 発行予定: ' + opt.version);
   else console.log('初回リリース: ' + opt.version);
@@ -543,11 +543,11 @@ function parseArgs(argv) {
 function printUsage() {
   console.log([
     '使い方:',
-    '  node tools/release-site.js generate --version X.Y.0 [--released-at YYYY-MM-DD] [--out build/release] [--zip path]',
-    '  node tools/release-site.js generate-pages --version X.Y.0 [--released-at YYYY-MM-DD] [--out artifacts/site-stage]',
-    '  node tools/release-site.js check-version --version X.Y.0',
+    '  node tools/release-site.js generate --version X.Y.Z [--released-at YYYY-MM-DD] [--out build/release] [--zip path]',
+    '  node tools/release-site.js generate-pages --version X.Y.Z [--released-at YYYY-MM-DD] [--out artifacts/site-stage]',
+    '  node tools/release-site.js check-version --version X.Y.Z',
     '  node tools/release-site.js published-version',
-    '  node tools/release-site.js upload --version X.Y.0 [--out build/release] [--zip path] [--dry-run]',
+    '  node tools/release-site.js upload --version X.Y.Z [--out build/release] [--zip path] [--dry-run]',
   ].join('\n'));
 }
 
