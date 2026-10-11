@@ -13,6 +13,7 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
     private readonly PopoverWindow window;
     private readonly Func<Forms.NotifyIcon?> tray;
     private readonly DispatcherTimer fade;
+    private readonly TrayClickGuard trayClick = new();
     private int fadeStep;
     private double fadeStart;
     private double fadeTarget;
@@ -27,6 +28,11 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
         fade = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnFade, window.Dispatcher);
         fade.Stop();
         window.HideRequested += Hide;
+        window.Deactivated += (_, _) =>
+        {
+            if (window.HideOnDeactivate)
+                trayClick.OnHiddenByDeactivation(PopoverAnchor.CursorOnTray(tray()), Environment.TickCount64);
+        };
         window.SizeChanged += (_, _) => QueuePosition();
         window.DpiChanged += (_, _) => QueuePosition();
         controller.SnapshotChanged += OnSnapshot;
@@ -41,15 +47,18 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
     {
         window.Dispatcher.VerifyAccess();
         if (window.IsVisible && fadeTarget != 0) { Hide(); return false; }
+        if (trayClick.ConsumeSuppression(Environment.TickCount64)) return false;
         Show(snapshot); return true;
     }
 
     public void Show(ShellSnapshot snapshot)
     {
         window.Dispatcher.VerifyAccess();
+        trayClick.Reset();
         window.UpdateSnapshot(snapshot);
         Position();
-        if (window.IsVisible) { if (fadeTarget == 0) FadeTo(1); return; }
+        // フェードアウト中に戻すときも前面に出す。非アクティブのままだと外側のクリックで閉じないため。
+        if (window.IsVisible) { if (fadeTarget == 0) { FadeTo(1); window.Activate(); } return; }
         window.Opacity = 0;
         window.Show();
         Position();
