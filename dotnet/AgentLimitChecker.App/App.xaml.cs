@@ -192,7 +192,13 @@ public partial class App : System.Windows.Application
             Visible = true
         };
         _notifyIcon.MouseDown += (_, _) => (_details as PopoverDetailsPresenter)?.OnTrayPressed();
-        _notifyIcon.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) RequestDetails(); };
+        // 抑止の判定はアイコンの左クリックだけで消費する。多重起動やメニューからの表示要求には効かせない。
+        _notifyIcon.MouseClick += (_, e) =>
+        {
+            if (e.Button != Forms.MouseButtons.Left) return;
+            if ((_details as PopoverDetailsPresenter)?.ConsumeTrayClickSuppression() == true) return;
+            RequestDetails();
+        };
         RebuildMenu(_shell.Snapshot);
     }
 
