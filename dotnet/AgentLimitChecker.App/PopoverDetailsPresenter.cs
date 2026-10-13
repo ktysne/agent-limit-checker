@@ -32,8 +32,7 @@ internal sealed class PopoverDetailsPresenter : IDetailsPresenter, IDisposable
         {
             if (!window.HideOnDeactivate) return;
             // 右クリックはメニューを開くだけで、続く「詳細を表示」は開く操作として扱う。
-            var pressedOnTray = Forms.Control.MouseButtons.HasFlag(Forms.MouseButtons.Left) && PopoverAnchor.CursorOnTray(tray());
-            trayClick.OnHiddenByDeactivation(pressedOnTray, Environment.TickCount64);
+            trayClick.OnHiddenByDeactivation(PopoverAnchor.PrimaryButtonPressedOnTray(tray()), Environment.TickCount64);
         };
         window.SizeChanged += (_, _) => QueuePosition();
         window.DpiChanged += (_, _) => QueuePosition();

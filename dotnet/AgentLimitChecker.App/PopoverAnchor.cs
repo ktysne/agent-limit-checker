@@ -35,7 +35,16 @@ internal readonly record struct PopoverAnchor(PopoverRect Tray, PopoverRect Work
         return new Rect { Left = point.X, Top = point.Y, Right = point.X, Bottom = point.Y };
     }
 
-    internal static bool CursorOnTray(Forms.NotifyIcon? icon)
+    /// <summary>主ボタン(左右入れ替え後の左)がアイコンの上で押されているなら true を返す。</summary>
+    /// <remarks>押下はタスクバーのスレッドへ届き、自スレッドの入力状態(Control.MouseButtons)に反映されないため、物理ボタンの現在の状態を読む。</remarks>
+    internal static bool PrimaryButtonPressedOnTray(Forms.NotifyIcon? icon)
+    {
+        const int VkLButton = 0x01, VkRButton = 0x02, SmSwapButton = 23;
+        var physicalButton = GetSystemMetrics(SmSwapButton) != 0 ? VkRButton : VkLButton;
+        return GetAsyncKeyState(physicalButton) < 0 && CursorOnTray(icon);
+    }
+
+    private static bool CursorOnTray(Forms.NotifyIcon? icon)
     {
         var rect = TrayRect(icon);
         GetCursorPos(out var point);
@@ -55,6 +64,8 @@ internal readonly record struct PopoverAnchor(PopoverRect Tray, PopoverRect Work
     private static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(nint monitor, int type, out uint x, out uint y);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowPos(nint window, nint after, int x, int y, int width, int height, uint flags);
 }
