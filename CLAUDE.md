@@ -115,5 +115,5 @@ npm test                                                                  # 発�
 3 択、サーキットブレーカー、PR 運用といった汎用ルールはここに写さず、SKILL を参照する。
 
 - 検証コマンド: アプリ本体は `dotnet test AgentLimitChecker.slnx -m:1 -nr:false --blame-hang-timeout 60s`、発行の道具は `npm test`（node --test）。配布物の確認は `build-release.bat`。
-- 基盤の更新: `npm run sync`（検査は `npm run sync:check`、未登録の配布物は `node tools/cross-review.sync.js --check-manifest`）で上流から取り込む。更新手順は「同期 → 表示された移行ノートの作業 → 上の検証コマンド」の順。
+- 基盤の更新: `npm run sync`（検査は `npm run sync:check`、未登録の配布物は `node tools/cross-review.js sync --check-manifest`）で上流から取り込む。更新手順は「同期 → 表示された移行ノートの作業 → 上の検証コマンド」の順。
 - レビューの起点: 既定のレビュアーは実装者と別のベンダーで、実装を一区切りしたら 3 択を `AskUserQuestion` で提示する（詳細は SKILL）。指摘、対応、妥当性確認は PR コメントに残し、本文は `.cross-review/round-<N>-triage.md` を書いて `node tools/cross-review.js comment --round <N>` で生成する。
